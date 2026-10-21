@@ -1,0 +1,32 @@
+# MATLAB
+*.asv
+*.autosave
+*.mex*
+slprj/
+codegen/
+*.slxc
+
+# Simulation outputs and large data
+data/**/*.mat
+data/**/*.bin
+data/**/*.h5
+data/**/*.log
+figures/**/*.png
+figures/**/*.fig
+figures/**/*.pdf
+
+# Keep directory placeholders
+!**/.gitkeep
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
