@@ -11,7 +11,6 @@ data/**/*.mat
 data/**/*.bin
 data/**/*.h5
 data/**/*.log
-figures/**/*.png
 figures/**/*.fig
 figures/**/*.pdf
 
@@ -23,6 +22,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# MATLAB preferences and caches
+.mlprefs/
 
 # Editors and OS
 .vscode/
