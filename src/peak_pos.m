@@ -1,13 +1,34 @@
 function zp = peak_pos(z, env)
-%PEAK_POS  Robust axial position of a point-target PSF.
-%   The global maximum can jump to a sidelobe; the intensity centroid of the
-%   main lobe is unbiased for a symmetric PSF and therefore more stable.
+%PEAK_POS  点目标 PSF 的轴向位置（强度质心法，抗旁瓣跳变）。
+%
+%   ZP = PEAK_POS(Z, ENV) 估计点目标在轴向上到底在哪。E0 用它标定每个角度的
+%   时间零点：把已知深度（30 mm）点目标的 DAS 图像按 dt 平移，再从平移后的
+%   峰值位置反推 dt。
+%
+%   输入
+%     z   ：轴向坐标向量 [m]
+%     env ：沿 z 的包络（|Hilbert|），长度与 Z 相同
+%
+%   为什么不直接用 max(env)？
+%   ------------------------
+%   PSF 的包络带旁瓣。0.05 mm 采样下全局最大值可能跳到相邻旁瓣，导致时间
+%   零点偏差半个波长（0.17 mm ≈ 0.22 µs），更糟的是这个跳变会随角度不连续地
+%   发生，dt(alpha) 曲线就会出现台阶，复合时那几度角的图像会错位。
+%   主瓣的强度质心对对称 PSF 是无偏的，并且随角度连续变化，因此能得到可用的
+%   dt(alpha) 曲线。
+%
+%   算法：先对包络做 5 点滑动平均找粗峰，再在 ±1.2 mm、±1.0 mm 两个窗口内
+%   各做一次质心，逐步收紧。
 
-z = z(:);  e = env(:).^2;
-[~, i] = max(movmean(env(:), 5));      % smoothed coarse maximum
+z = z(:);
+e = env(:).^2;                          % 用强度（|p|^2）求质心，不是用幅度
+
+[~, i] = max(movmean(env(:), 5));       % 5 点平滑后的粗峰位置
 z0 = z(i);
-w  = abs(z - z0) <= 1.2e-3;
+
+w  = abs(z - z0) <= 1.2e-3;             % 第一遍：粗峰附近 ±1.2 mm
 zp = sum(z(w).*e(w)) / sum(e(w));
-w  = abs(z - zp) <= 1.0e-3;
+
+w  = abs(z - zp) <= 1.0e-3;             % 第二遍：以第一遍结果为中心收紧到 ±1 mm
 zp = sum(z(w).*e(w)) / sum(e(w));
 end

@@ -1,13 +1,64 @@
 function stage_analysis(P)
-%STAGE_ANALYSIS  E3/E4/E5: compounding, metrics, tables.
-%   Reads data/pw, data/foc, data/noise; writes data/res/results.mat + CSV.
+%STAGE_ANALYSIS  E3/E4/E5：相干复合、指标计算与汇总表。
+%
+%   STAGE_ANALYSIS(P) 是整个实验的“规约（reduce）”步骤。它读取采集阶段写下的
+%   逐次发射波束形成数据，输出：
+%     data/res/results.mat  ：所有图像与所有指标（供画图使用）
+%     data/res/*.csv        ：同样内容的 CSV（供生成报告表格）
+%
+%   输入（都在磁盘上）
+%     data/pw/<TAG>_a###.mat   波束形成射频，每个角度/体模一个文件
+%     data/foc/<TAG>_l###.mat  波束形成射频，每条聚焦线一个文件
+%     data/noise/N1_a###.mat   波束形成后的噪声，每个角度一个文件
+%
+%   每个复合档位的处理链
+%     1. 把该子集的 n 幅波束形成射频相加            （相干！）
+%     2. 相加之后才取 Hilbert 包络                  （绝不能提前）
+%     3. 对数压缩到 60 dB 用于显示
+%     4. 测分辨率 / 对比度 / 散斑 / SNR
+%
+%   如果先取包络再相加，就是非相干复合——那正是论文反复强调的错误做法，横向
+%   分辨率一点都不会改善。把求和留在射频域，是本函数最核心的实现细节。
+%
+%   指标约定（以及读表时要注意的地方）
+%   ----------------------------------
+%   * 分辨率在点目标体模（P3）上测，定义为横向 -10 dB 宽度、轴向 -6 dB 宽度。
+%     这两个电平是设计文档确定的；用混了会让数值差 30 % 左右。
+%   * 对比度用“强度”（包络平方），内区是半径 2 mm 的圆盘，外区是 4–6 mm 的环带。
+%     在无噪声图像上它由旁瓣决定，所以这里能到 40 dB 以上（11 角度实测 45 dB），
+%     而论文只有 12–33 dB（论文的对比度是噪声受限的）。
+%   * CNR 用同样的区域；囊肿一黑，它就饱和在 0.7 附近，在本实验条件下并不能区分
+%     方法优劣。列出它是为了完整，而不是当作排序依据。
+%   * SNR = 10log10(<s^2>/<n^2>)，5x5 mm 滑窗，其中噪声功率来自真正经过同一个
+%     DAS 的噪声实现（不是公式推的）。全部相对于 30 mm 处的单平面波，这也是论文
+%     报告复合增益的方式。
+%   * 散斑统计在去掉缓慢亮度趋势之后计算（仿真没有 TGC）；不去趋势的话，即使
+%     散斑完全发展，μ/σ 也会掉到 0.5 左右。
+%
+%   数据依赖关系（哪一组输入决定哪一组输出）
+%   ----------------------------------------
+%     P1  的 11 个角度  ──►  PW 与 C11 的 B 模式、SNR、散斑统计
+%     P3  的 11 个角度  ──►  分辨率（横向/轴向宽度）
+%     REM 的 11 个角度  ──►  与 P1 相减得到 P2，再算对比度/CNR
+%     noise 的 11 帧     ──►  SNR 的噪声项、含噪对比度
+%     foc/*.mat         ──►  单焦点参照（分辨率、对比度、SNR 各一条曲线）
+%   注意 P2 不是独立采集出来的，而是 P1 − REM；这一减法只在射频域、取包络之前
+%   做才严格成立。
 
 fprintf('\n===== analysis =====\n');
 outdir = fullfile(P.dataDir, 'res');
 if ~exist(outdir,'dir'), mkdir(outdir); end
 
-idxAll = subset_indices(P);
-names = {'PW','C5','C9','C17','C33','C45','C71'};
+idxAll = subset_indices(P);          % 两种方法各自的角度下标
+% 名字按 P.subsetN 自动生成：n=1 叫 PW，n>1 叫 Cn；顺序与 P.subsetN 一致。
+names = cell(1, numel(P.subsetN));
+for k = 1:numel(P.subsetN)
+    if P.subsetN(k) == 1
+        names{k} = 'PW';
+    else
+        names{k} = sprintf('C%d', P.subsetN(k));
+    end
+end
 nM = numel(names);
 
 R = struct();
@@ -15,33 +66,38 @@ R.names = names;
 R.nAngles = P.subsetN;
 R.x = P.x;  R.z = P.z;
 
-% ---------------------------------------------------------------- compound P1
+% ---------------------------------------------------------------- 复合 P1
+% 每档一遍：用同一组角度下标同时复合三个体模与噪声，这样 P2 = P1 - REM 自洽，
+% 噪声也正好属于这几次发射。
 for k = 1:nM
-    rf1 = compound_rf(P, 'P1',  idxAll{k});
-    rfR = compound_rf(P, 'REM', idxAll{k});
-    rf3 = compound_rf(P, 'P3',  idxAll{k});
-    nz1 = compound_noise(P, idxAll{k});
+    rf1 = compound_rf(P, 'P1',  idxAll{k});      % 均匀散斑体模
+    rfR = compound_rf(P, 'REM', idxAll{k});      % 囊肿内部被移除的散射子
+    rf3 = compound_rf(P, 'P3',  idxAll{k});      % 点目标
+    nz1 = compound_noise(P, idxAll{k});          % 同样这几次发射的噪声
 
+    % ---- 包络必须在复合之后取 ------------------------------------------
     env1 = abs(hilbert(double(rf1)));
     env3 = abs(hilbert(double(rf3)));
-    env2 = abs(hilbert(double(rf1 - rfR)));
-    env2n= abs(hilbert(double(rf1 - rfR + nz1)));
+    env2 = abs(hilbert(double(rf1 - rfR)));      % P2 = P1 - REM（幅度线性）
+    env2n= abs(hilbert(double(rf1 - rfR + nz1)));% 同上，叠加采集噪声
 
-    R.P1.rf(:,:,k) = rf1;
-    R.P1.nz(:,:,k) = nz1;
-    R.P1.db(:,:,k) = to_db(env1, P.drDB);
+    R.P1.rf(:,:,k) = rf1;                        % 原始射频，图 F7 需要
+    R.P1.nz(:,:,k) = nz1;                        % 噪声射频，SNR 指标需要
+    R.P1.db(:,:,k) = to_db(env1, P.drDB);        % B 模式，60 dB
     R.P2.db(:,:,k) = to_db(env2, P.drDB);
     R.P3.db(:,:,k) = to_db(env3, P.drDB);
-    R.P3.env(:,:,k) = single(env3);
+    R.P3.env(:,:,k) = single(env3);              % 包络留着算 PSF 指标
 
-    R.contrast(k)      = metrics_contrast(env2,  P.x, P.z, P);
-    R.contrastN(k)     = metrics_contrast(env2n, P.x, P.z, P);
+    R.contrast(k)      = metrics_contrast(env2,  P.x, P.z, P);   % 无噪声
+    R.contrastN(k)     = metrics_contrast(env2n, P.x, P.z, P);   % 含噪声
     R.speck(k)         = metrics_speckle(env1, P.x, P.z, 0, 30e-3, 5e-3);
 
     fprintf('  %s done\n', names{k});
 end
 
-% ------------------------------------------------------------ focused images
+% ------------------------------------------------------------ 聚焦图像
+% 传统 B 模式按线拼接成二维图像。P3 用 256 线（PSF 采样更细），P1/P2 用 128 线
+% （一个阵元一条线）。
 rfF1 = load_foc(P, 'P1',  P.xf);
 rfFR = load_foc(P, 'REM', P.xf);
 rfF3 = load_foc(P, 'P3',  P.xpsf);
@@ -61,7 +117,8 @@ R.contrastF  = metrics_contrast(envF2,  P.xf, P.z, P);
 R.contrastFN = metrics_contrast(envF2n, P.xf, P.z, P);
 R.speckF     = metrics_speckle(abs(hilbert(double(rfF1))), P.xf, P.z, 0, 30e-3, 5e-3);
 
-% ------------------------------------------------------------- resolution
+% ------------------------------------------------------------- 分辨率
+% 轴线上六个目标（15…55 mm），得到“分辨率随深度”曲线。
 zPts = [15 25 30 35 45 55]*1e-3;
 xPts = [0 0 0 0 0 0]*1e-3;
 R.zPts = zPts;  R.xPts = xPts;
@@ -79,7 +136,7 @@ for q = 1:numel(zPts)
 end
 R.w10 = w10;  R.w6 = w6;  R.w10F = w10F;  R.w6F = w6F;
 
-% lateral points at z = 30 mm
+% z = 30 mm 处的三个横向位置：检查分辨率在横向上是否均匀
 xl = [-12 0 12]*1e-3;
 R.w10Lat = nan(nM, 3);  R.w10LatF = nan(1,3);
 for q = 1:3
@@ -92,6 +149,8 @@ for q = 1:3
 end
 
 % ------------------------------------------------------------------- SNR
+% SNR(x,z) = 10log10( <s^2> / <n^2> )，5x5 mm 滑窗；沿 x 取中位数得到每个深度
+% 一条曲线。最后全部相对于 30 mm 处的单平面波——这就是论文报告增益的方式。
 zdep = (15:5:55)*1e-3;
 [zz, snrPW] = snr_curve(R.P1.rf(:,:,1), R.P1.nz(:,:,1), P, P.dx);
 snrM = zeros(nM, numel(zdep));
@@ -104,23 +163,25 @@ snrF = interp1(zzF, sF, zdep, 'linear');
 R.zdep = zdep;
 R.snr  = snrM;
 R.snrF = snrF;
-R.snrAbsPW30 = interp1(zz, snrPW, 30e-3, 'linear');
+R.snrAbsPW30 = interp1(zz, snrPW, 30e-3, 'linear');   % 0 dB 参考点
 R.snrRel = snrM - R.snrAbsPW30;
 R.snrRelF = snrF - R.snrAbsPW30;
 
-% ------------------------------------------------- forward model check (E0/7)
+% ------------------------------------------------- 理论增益（用于前向检查）
+% 理想相干复合增益；报告把实测值与之对比。
 R.snrGainTheory = 10*log10(P.subsetN);
 
-% ------------------------------------------------------------------ save
-R.hist = 'placeholder';
+% ------------------------------------------------------------------ 保存
 save(fullfile(outdir,'results.mat'), '-struct', 'R', '-v7.3');
 fprintf('saved %s\n', fullfile(outdir,'results.mat'));
 
-write_csv(outdir, names, R);
+write_csv(outdir, names, R);         % 同样内容导出 CSV，供报告使用
 end
 
 % =========================================================================
 function rf = compound_rf(P, tag, idx)
+%COMPOUND_RF  若干角度的波束形成射频相干求和（单个体模）。
+%   求和刻意放在射频域：对包络求和属于非相干复合，不会锐化发射波束。
 rf = zeros(numel(P.z), numel(P.x), 'single');
 for i = idx
     S = load(fullfile(P.dataDir,'pw',sprintf('%s_a%03d.mat', tag, i)));
@@ -129,6 +190,7 @@ end
 end
 
 function rf = compound_noise(P, idx)
+%COMPOUND_NOISE  同样这些角度的噪声图像相干求和。
 rf = zeros(numel(P.z), numel(P.x), 'single');
 for i = idx
     S = load(fullfile(P.dataDir,'noise',sprintf('N1_a%03d.mat', i)));
@@ -137,6 +199,7 @@ end
 end
 
 function rf = load_foc(P, tag, xf)
+%LOAD_FOC  把某个体模的逐线文件拼成完整聚焦 B 模式图像。
 rf = zeros(numel(P.z), numel(xf), 'single');
 for k = 1:numel(xf)
     S = load(fullfile(P.dataDir,'foc',sprintf('%s_l%03d.mat', tag, k)));
@@ -145,6 +208,7 @@ end
 end
 
 function rf = load_foc_noise(P, xf)
+%LOAD_FOC_NOISE  同上，拼接只有噪声的聚焦图像。
 rf = zeros(numel(P.z), numel(xf), 'single');
 for k = 1:numel(xf)
     S = load(fullfile(P.dataDir,'noise',sprintf('NF_l%03d.mat', k)));
@@ -153,17 +217,26 @@ end
 end
 
 function [zz, snr] = snr_curve(rf, nrf, P, dx)
+%SNR_CURVE  逐像素 SNR 的深度曲线（dB）。
+%   信号与噪声功率都用 5x5 mm 盒平滑（可分离，所以用两个一维滤波器而不是一个
+%   二维卷积）。沿 x 取中位数：散斑让单个像素的 SNR 起伏很大，中位数更稳。
 ps = double(rf).^2;  pn = double(nrf).^2;
-h1 = ones(round(5e-3/P.dz),1); h1 = h1/sum(h1);
-h2 = ones(1, round(5e-3/dx));  h2 = h2/sum(h2);
+
+h1 = ones(round(5e-3/P.dz),1); h1 = h1/sum(h1);     % 轴向 5 mm 盒
+h2 = ones(1, round(5e-3/dx));  h2 = h2/sum(h2);     % 横向 5 mm 盒
 ps = imfilter(imfilter(ps, h1, 'replicate'), h2, 'replicate');
 pn = imfilter(imfilter(pn, h1, 'replicate'), h2, 'replicate');
-S  = 10*log10(ps ./ max(pn, realmin));
+
+S  = 10*log10(ps ./ max(pn, realmin));               % SNR 图 [dB]
 zz = P.z;
-snr = median(S, 2);
+snr = median(S, 2);                                  % 每个深度一个值
 end
 
 function write_csv(outdir, names, R)
+%WRITE_CSV  把指标表导出为 CSV，这样重新生成报告时不必再跑 MATLAB 分析。
+%   每类指标一个文件。
+
+% ---- 分辨率：六个轴上深度处的 w10 与 w6 -------------------------------
 fid = fopen(fullfile(outdir,'table_resolution.csv'),'w');
 fprintf(fid, 'method,');
 for q = 1:numel(R.zPts), fprintf(fid,'w10_%dmm,w6_%dmm,', round(R.zPts(q)*1e3), round(R.zPts(q)*1e3)); end
@@ -171,7 +244,7 @@ fprintf(fid,'\n');
 for k = 1:numel(names)
     fprintf(fid,'%s,', names{k});
     for q = 1:numel(R.zPts)
-        fprintf(fid,'%.3f,%.3f,', R.w10(k,q)*1e3, R.w6(k,q)*1e3);
+        fprintf(fid,'%.3f,%.3f,', R.w10(k,q)*1e3, R.w6(k,q)*1e3);   % 单位 mm
     end
     fprintf(fid,'\n');
 end
@@ -180,6 +253,7 @@ for q = 1:numel(R.zPts), fprintf(fid,'%.3f,%.3f,', R.w10F(q)*1e3, R.w6F(q)*1e3);
 fprintf(fid,'\n');
 fclose(fid);
 
+% ---- 对比度与 CNR，无噪声与含噪声各一份 ------------------------------
 fid = fopen(fullfile(outdir,'table_contrast.csv'),'w');
 fprintf(fid,'method,nAngles,C_dB,C_std,CNR,CNR_std,C_noisy_dB,CNR_noisy\n');
 for k = 1:numel(names)
@@ -192,6 +266,7 @@ fprintf(fid,'FOCUSED,128,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n', ...
     R.contrastFN.Cmean, R.contrastFN.CNRmean);
 fclose(fid);
 
+% ---- 相对 SNR 随深度 ------------------------------------------------
 fid = fopen(fullfile(outdir,'table_snr.csv'),'w');
 fprintf(fid,'method,'); fprintf(fid,'%dmm,', round(R.zdep*1e3)); fprintf(fid,'\n');
 for k = 1:numel(names)
@@ -202,12 +277,14 @@ end
 fprintf(fid,'FOCUSED,'); fprintf(fid,'%.2f,', R.snrRelF); fprintf(fid,'\n');
 fclose(fid);
 
+% ---- 散斑统计 -------------------------------------------------------
 fid = fopen(fullfile(outdir,'table_speckle.csv'),'w');
-fprintf(fid,'method,mu_over_sigma,corrX_mm,corrZ_mm\n');
+fprintf(fid,'method,mu_over_sigma_intensity,mu_over_sigma_envelope,corrX_mm,corrZ_mm\n');
 for k = 1:numel(names)
-    fprintf(fid,'%s,%.3f,%.3f,%.3f\n', names{k}, R.speck(k).ratio, ...
+    fprintf(fid,'%s,%.3f,%.3f,%.3f,%.3f\n', names{k}, R.speck(k).ratio, R.speck(k).ratioA, ...
         R.speck(k).corrX*1e3, R.speck(k).corrZ*1e3);
 end
-fprintf(fid,'FOCUSED,%.3f,%.3f,%.3f\n', R.speckF.ratio, R.speckF.corrX*1e3, R.speckF.corrZ*1e3);
+fprintf(fid,'FOCUSED,%.3f,%.3f,%.3f,%.3f\n', R.speckF.ratio, R.speckF.ratioA, ...
+    R.speckF.corrX*1e3, R.speckF.corrZ*1e3);
 fclose(fid);
 end

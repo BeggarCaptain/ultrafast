@@ -1,11 +1,27 @@
 function P = params(root)
-%PARAMS  Single source of truth for all simulation parameters.
-%   P = PARAMS() builds the parameter struct; ROOT is the project directory.
+%PARAMS  全部仿真参数集中在此（唯一真源）。
 %
-%   Reference: G. Montaldo et al., "Coherent Plane-Wave Compounding for Very
-%   High Frame Rate Ultrasonography and Transient Elastography", IEEE TUFFC
-%   56(3):489-506, 2009.
+%   P = PARAMS(ROOT) 返回本项目所有脚本/函数共用的参数结构体。ROOT 是工程根
+%   目录（包含 config/、src/、run/、data/、figures/ 的那一层）；省略时用当前
+%   工作目录。
+%
+%   为什么所有参数放在一个文件里？
+%   ------------------------------
+%   采集、波束形成、声场、指标、绘图五个阶段必须对“网格、角度、体模、脉冲”
+%   有完全一致的理解。参数集中在这里，改一个数（例如接收 F 数）会同时作用到
+%   所有阶段，报告里也只需要引用一张参数表。
+%
+%   单位约定：除字段名特别说明外（mm、dB 等），一律使用国际单位制
+%   （米、秒、赫兹、弧度）；只有在画图时才换算成毫米。
+%
+%   参考文献：G. Montaldo, M. Tanter, J. Bercoff, N. Benech, M. Fink,
+%   "Coherent Plane-Wave Compounding for Very High Frame Rate Ultrasonography
+%   and Transient Elastography", IEEE TUFFC 56(3):489-506, 2009.
 
+% -------------------------------------------------------------------------
+% 工程目录结构。所有路径都由 ROOT 推导，不写死绝对路径，整个文件夹可以整体
+% 拷贝到另一台机器上直接运行。
+% -------------------------------------------------------------------------
 if nargin < 1 || isempty(root)
     root = pwd;
 end
@@ -15,86 +31,116 @@ P.dataDir = fullfile(root, 'data');
 P.figDir  = fullfile(root, 'figures');
 P.docDir  = fullfile(root, 'docs');
 
-% ---------------------------------------------------------------- acoustics
+% ---------------------------------------------------------------- 声学参数
+% c   ：介质声速（论文取值，也是 Field II 默认值）
+% fs  ：仿真采样率。4.5 MHz 下 30 MHz 约合每周期 6.7 个采样点，线性插值误差
+%       可以压到 -20 dB 以下。
+% f0  ：探头标称中心频率（论文），只用于计算波长 lambda。
+% bwGoal：两程脉冲的 -6 dB 相对带宽（论文）；实际值在 E0 中调脉冲形状后实测。
 P.c      = 1540;          % m/s
-P.fs     = 30e6;          % Hz, simulation sampling rate
-P.f0     = 4.5e6;         % Hz, nominal centre frequency
-P.bwGoal = 0.60;          % -6 dB relative bandwidth (paper)
+P.fs     = 30e6;          % Hz，仿真采样率
+P.f0     = 4.5e6;         % Hz，标称中心频率
+P.bwGoal = 0.60;          % -6 dB 相对带宽（论文）
 
-% ------------------------------------------------------------------- array
-P.N        = 128;         % elements (paper: 128, 124 active)
-P.pitch    = 0.33e-3;     % m
-P.width    = 0.30e-3;     % m (kerf 0.03 mm)
-P.height   = 5.0e-3;      % m
-P.kerf     = 0.03e-3;     % m
-P.elevFocus= 30e-3;       % m, elevation lens focus
-P.Fnum     = 1.75;        % receive F-number
-P.xe       = ((0:P.N-1) - (P.N-1)/2) * P.pitch;   % element centres [m]
+% ------------------------------------------------------------------- 阵列
+% 128 阵元线阵（论文实际是 124 个有效阵元，差异见报告 3.4 节）。阵元宽度、
+% 高度、kerf 论文没有给，按 0.33 mm 间距探头的典型值取。
+%
+% 仰角方向不做聚焦：本仿真里高度方向只有一个子阵元（no_sub_y = 1），无法表达
+% 仰角延时剖面，xdc_linear_array 的焦点参数因此传 [0 0 0]。实测传 30 mm 与传 0
+% 的 calc_scat_multi 输出逐位相同（差值为 0），所以配置里不留这个参数。
+P.N        = 128;         % 阵元数
+P.pitch    = 0.33e-3;     % m，阵元间距
+P.width    = 0.30e-3;     % m，阵元宽度（kerf = 间距 - 宽度 = 0.03 mm）
+P.height   = 5.0e-3;      % m，阵元高度（仰角方向孔径）
+P.kerf     = 0.03e-3;     % m，阵元间隙
+P.Fnum     = 1.75;        % 接收 F 数（论文），不做变迹
+P.xe       = ((0:P.N-1) - (P.N-1)/2) * P.pitch;   % 阵元中心坐标 [m]
 
-% ------------------------------------------------ transmit pulse (calibrated)
-% The two-way pulse is the transducer impulse response applied twice, so the
-% single-way Gaussian must be centred above f0.  E0 sweep on a single scatterer
-% at 30 mm: carrier 4.90 MHz, sigma 0.32/f0 -> fc 4.45 MHz, -6 dB BW 62.8 %
-% (target 4.5 +- 0.1 MHz, 60 +- 5 %).
-P.pulseSigma   = 0.32;      % sigma = pulseSigma / f0
-P.pulseCarrier = 4.90e6;    % Hz
-P.pulseHalfLen = 5;         % pulse length = pulseHalfLen / carrier
+% ------------------------------------------------ 发射脉冲（已标定）
+% Field II 会把激励、探头冲激响应、空间冲激响应依次卷积。用 sigma = 0.32/f0、
+% 载频 4.90 MHz 的高斯包络正弦，得到的“
+% 
+% 
+% 
+% 两程”脉冲是 4.45 MHz / 62.8 % 带宽，
+% 正是论文要求的指标。这些数字来自 E0 的参数扫描，换阵列或换 f0 必须重调。
+P.pulseSigma   = 0.32;      % 高斯 sigma，单位是 1/f0
+P.pulseCarrier = 4.90e6;    % Hz，单程脉冲载频
+P.pulseHalfLen = 5;         % 脉冲长度 = 5/载频（约 5 个周期）
 
-% ---------------------------------------------------------- imaging grid
-P.lambda = P.c / P.f0;
-P.L      = P.N * P.pitch;     % 42.24 mm
-P.lines  = 256;               % compounding / display lines
-P.dx     = P.lambda / 2;      % 0.1711 mm
-P.zMin   = 5e-3;
-P.zMax   = 60e-3;
-P.dz     = 0.05e-3;
-P.x      = ((0:P.lines-1) - (P.lines-1)/2) * P.dx;
-P.z      = (P.zMin:P.dz:P.zMax)';
+% ---------------------------------------------------------- 成像网格
+% 复合/显示图像是 256 线、横向 ±21.8 mm、深度 5–60 mm 的规则网格。横向取
+% lambda/2，是 4.5 MHz 探头常用的奈奎斯特采样。
+P.lambda = P.c / P.f0;        % m，标称频率下的波长
+P.L      = P.N * P.pitch;     % m，阵列长度（42.24 mm）
+P.lines  = 256;               % 图像线数（复合/显示用）
+P.dx     = P.lambda / 2;      % m，横向像素（0.171 mm）
+P.zMin   = 5e-3;              % m，最浅成像深度
+P.zMax   = 60e-3;             % m，最深成像深度
+P.dz     = 0.05e-3;           % m，轴向像素（0.05 mm）
+P.x      = ((0:P.lines-1) - (P.lines-1)/2) * P.dx;   % m，各线横向坐标
+P.z      = (P.zMin:P.dz:P.zMax)';                    % m，深度向量
 
-% ------------------------------------------------------- conventional B-mode
-P.txFocus  = 30e-3;                         % m
-P.txLines  = 128;
-P.txPitch  = 0.33e-3;
-P.xf       = ((0:P.txLines-1) - (P.txLines-1)/2) * P.txPitch;
-P.txApodW  = P.txFocus / P.Fnum;            % 17.14 mm
-P.psfLines = 256;                           % point-target phantom uses 256
-P.xpsf     = ((0:P.psfLines-1) - (P.psfLines-1)/2) * P.dx;
+% ------------------------------------------------------- 常规聚焦 B 模式
+% 每条线发射一次，焦点 30 mm，发射孔径 52 阵元（17.14 mm，发射 F 数 1.75）。
+% 点目标体模用 256 线，使其 PSF 与复合图像采样一样细。
+P.txFocus  = 30e-3;                         % m，发射焦点深度
+P.txLines  = 128;                           % 散斑/囊肿体模的线数
+P.txPitch  = 0.33e-3;                       % m，线间距（一个阵元一条线）
+P.xf       = ((0:P.txLines-1) - (P.txLines-1)/2) * P.txPitch;   % 各线坐标
+P.txApodW  = P.txFocus / P.Fnum;            % m，发射孔径宽度（17.1 mm）
+P.psfLines = 256;                           % 点目标体模的线数
+P.xpsf     = ((0:P.psfLines-1) - (P.psfLines-1)/2) * P.dx;      % 各线坐标
 
-% --------------------------------------------------------- plane-wave angles
-P.iAng    = -35:35;                          % i in sin(alpha) = i*lambda/L
-P.angles  = asin(P.iAng * P.lambda / P.L);
-P.nAngles = numel(P.angles);
-P.subsetN = [1 5 9 17 33 45 71];
-P.nOpt    = P.L / (P.lambda * P.Fnum);       % ~70.5
+% --------------------------------------------------------- 平面波角度
+% 实验设定：11 个平面波，范围 -10° ~ +10°，等间隔 2°。
+% 采集、复合、声场图与所有显示只用这一套角度，不再保留其他档位。
+P.angStepDeg = 2;                                   % 角度间隔 [deg]
+P.iAng    = -5:5;                                   % 角度序号，0 = 垂直入射
+P.angles  = P.iAng * P.angStepDeg * pi/180;         % rad，-10° … +10°
+P.nAngles = numel(P.angles);                        % 11
+P.iZero   = find(P.iAng == 0);                      % 0° 那次发射的下标（= 6）
+P.subsetN = [1 11];                                 % 参与比较的方法：PW 与 C11
+% P.adoptedN = 11;                                    % 主配置（唯一复合设置）————已无意义
+P.nOpt    = P.L / (P.lambda * P.Fnum);              % ≈70.5，仅作参考，不参与计算
 
-% ---------------------------------------------------------------- phantoms
-P.seed   = 2009;
-P.scatN  = 20000;
-P.phX    = [-22 22] * 1e-3;    % slightly wider than the display (+-21.8 mm)
-P.phZ    = [5 60] * 1e-3;
-P.cystR  = 3e-3;
-P.cystX  = [-12 0 12] * 1e-3;
-P.cystZ  = [20 35 50] * 1e-3;
-P.ptX    = [0 0 0 0 0 0 -12 12] * 1e-3;
-P.ptZ    = [15 25 30 35 45 55 30 30] * 1e-3;
-P.ptAmp  = 30;
+% ---------------------------------------------------------------- 体模
+% 全部体模都在 y = 0 平面（二维仿真）。P.seed 固定随机数，保证每次运行、每种
+% 方法看到的散射子完全相同。
+P.seed   = 2009;               % 随机种子（论文发表年份）
+P.scatN  = 20000;              % P1 均匀散射子数量
+P.phX    = [-22 22] * 1e-3;    % m，横向范围（略宽于显示范围）
+P.phZ    = [5 60] * 1e-3;      % m，轴向范围
+P.cystR  = 3e-3;               % m，囊肿半径（直径 6 mm）
+P.cystX  = [-12 0 12] * 1e-3;  % m，囊肿中心横坐标
+P.cystZ  = [20 35 50] * 1e-3;  % m，囊肿中心深度（3 x 3 = 9 个囊肿）
+P.ptX    = [0 0 0 0 0 0 -12 12] * 1e-3;      % m，点目标横坐标
+P.ptZ    = [15 25 30 35 45 55 30 30] * 1e-3; % m，点目标深度
+P.ptAmp  = 30;                 % 点目标幅度（够强，无噪声时 PSF 也清晰）
 
-% ------------------------------------------------------------------- noise
-P.snrPW30 = 20;      % dB target for single plane wave at z = 30 mm
-P.nMC     = 20;      % Monte-Carlo repeats for the analytic noise check
+% ------------------------------------------------------------------- 噪声
+% 电子噪声加在“通道数据”上，每个阵元、每次发射都独立。sigma_e 由“单平面波在
+% 30 mm 处 20 dB SNR”标定，之后所有方法共用同一个值。
+P.snrPW30 = 20;      % dB，单平面波在 z = 30 mm 的目标 SNR
+P.nMC     = 20;      % 解析噪声公式的蒙特卡洛重复次数
 
-% --------------------------------------------------------------- displays
-P.drDB   = 60;       % display dynamic range
+% --------------------------------------------------------------- 显示
+P.drDB   = 60;       % dB，所有 B 模式图像的显示动态范围
 
-% ------------------------------------------------------------ field maps
-P.fmX = (-20:1:20) * 1e-3;
-P.fmZ = (5:1:60) * 1e-3;
+% ------------------------------------------------------------ 声场图
+% calc_hp 用的 1 mm 网格（41 x 56 个点）。
+P.fmX = (-20:1:20) * 1e-3;   % m
+P.fmZ = (5:1:60) * 1e-3;     % m
 
-% --------------------------------------------------------------- E7 (opt.)
-P.e7.warmup = 3;
-P.e7.repeat = 10;
-P.e7.nList  = [1 5 9 17 33 45 71];
+% --------------------------------------------------------------- E7（可选）
+% 可选的 GPU 实验计时协议（本机无 CUDA 设备，未执行）。预热若干次后丢弃，
+% 正式重复若干次，取中位数。
+P.e7.warmup = 3;             % 丢弃前 N 次
+P.e7.repeat = 10;            % 正式重复次数
+P.e7.nList  = [1 11];         % E7 只比较单平面波与 11 角度复合
 
-% ------------------------------------------------------- external toolbox
+% ------------------------------------------------------- 外部工具箱路径
+% Field II 是第三方 MATLAB 工具箱；这是整个配置里唯一与具体机器相关的项。
 P.fieldIIPath = 'C:\Users\HP\Desktop\~\Field_II_ver_3_30_windows';
 end
