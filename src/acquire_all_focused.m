@@ -8,8 +8,8 @@ function acquire_all_focused(P, tag, pos, amp, xf, keepCh)
 %     tag    ：体模标记，用于文件名（'P1'、'P3' 或 'REM'）
 %     pos    ：N x 3 散射子坐标 [m]
 %     amp    ：N x 1 幅度
-%     xf     ：线的横向位置向量 [m]——散斑/囊肿体模用 P.xf（128 线、0.33 mm），
-%              点目标体模用 P.xpsf（256 线、0.171 mm）
+%     xf     ：线的横向位置向量 [m]——散斑/囊肿体模用 P.txLineX（128 线、0.33 mm），
+%              点目标体模用 P.psfLineX（256 线、0.171 mm）
 %     keepCh ：true 时额外保存中心线那一线的原始通道（否则每线多 4.5 MB，而
 %              画图只需要一条线）
 %
@@ -29,8 +29,10 @@ function acquire_all_focused(P, tag, pos, amp, xf, keepCh)
 outdir = fullfile(P.dataDir, 'foc');
 if ~exist(outdir, 'dir'), mkdir(outdir); end
 
+stamp_guard(P);                                 % 参数变了就拒绝复用旧数据（见 stamp_guard）
+
 C  = load(fullfile(P.dataDir, 'calib.mat'));    % E0 得到的 dt_foc
-Th = f2_setup(P);                               % 阵列 + 脉冲
+[Th, ThR] = f2_setup(P);                        % 发射句柄 + 接收句柄
 
 nL   = numel(xf);
 tAll = tic;
@@ -39,8 +41,8 @@ for k = 1:nL
     if exist(f, 'file'), continue; end          % 已有文件：跳过（断点续跑）
 
     t1 = tic;
-    [rf, t0] = acquire_focused(Th, P, xf(k), pos, amp);       % 一次聚焦发射
-    [img, w2] = das_focused(rf, t0, xf(k), P, P.z, C.dt_foc); % 只重建这一条线
+    [rf, t0] = acquire_focused(Th, ThR, P, xf(k), pos, amp);  % 一次聚焦发射
+    [img, w2] = das_focused(rf, t0, xf(k), P, P.imageZ, C.dt_foc); % 只重建这一条线
 
     S = struct('img', single(img), 'w2', single(w2), 't0', t0, ...
                'dt', C.dt_foc, 'xf', xf(k), 'tag', tag, 'Nt', size(rf,1));

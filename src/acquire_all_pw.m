@@ -28,8 +28,10 @@ function acquire_all_pw(P, tag, pos, amp, keepCh)
 outdir = fullfile(P.dataDir, 'pw');             % 每个角度一个文件
 if ~exist(outdir, 'dir'), mkdir(outdir); end
 
+stamp_guard(P);                                 % 参数变了就拒绝复用旧数据（见 stamp_guard）
+
 C  = load(fullfile(P.dataDir, 'calib.mat'));    % E0 标定出的 dt(alpha)
-Th = f2_setup(P);                               % 阵列 + 脉冲
+[Th, ThR] = f2_setup(P);                        % 发射句柄 + 接收句柄
 
 tAll = tic;                                     % 总耗时，用于估算剩余时间
 for i = 1:P.nAngles
@@ -37,13 +39,13 @@ for i = 1:P.nAngles
     if exist(f, 'file'), continue; end          % 已有文件：跳过（断点续跑）
 
     t1 = tic;
-    [rf, t0] = acquire_pw(Th, P, P.angles(i), pos, amp);      % 一次发射
+    [rf, t0] = acquire_pw(Th, ThR, P, P.angles(i), pos, amp);  % 一次发射
     dt = C.dt(i);
-    [img, w2] = das_pw(rf, t0, P.angles(i), P, P.x, P.z, dt); % 波束形成
+    [img, w2] = das_pw(rf, t0, P.angles(i), P, P.imageX, P.imageZ, dt); % 波束形成
 
     S = struct('img', single(img), 'w2', single(w2), 't0', t0, ...
                'dt', dt, 'alpha', P.angles(i), 'tag', tag);
-    if keepCh || (strcmp(tag,'P3') && i == P.iZero)   % 点目标体模的 0° 角度，留给 F6
+    if keepCh || (strcmp(tag,'P3') && i == P.zeroAngleIndex)   % 点目标体模的 0° 角度，留给 F6
         S.ch = single(rf);                       % 原始通道存成 single 省空间
     end
     save(f, '-struct', 'S');                     % 先落盘再做下一个

@@ -7,7 +7,7 @@ function [img, w2] = das_pw(rf, t0, alpha, P, x, z, dt)
 %     rf    ：[Nt x Nch] 一次发射的通道数据（由 acquire_pw 得到）
 %     t0    ：rf 第 1 个采样点的绝对时刻 [s]
 %     alpha ：该次发射的偏转角 [rad]
-%     P     ：参数结构体（提供 c、fs、xe、Fnum）
+%     P     ：参数结构体（提供 soundSpeed、sampleRate、elementX、fNumber）
 %     x     ：横向像素坐标 [m]（行或列都可以）
 %     z     ：轴向像素坐标 [m]
 %     dt    ：该角度的时间零点校正 [s]（E0 标定），默认 0
@@ -39,19 +39,19 @@ w2  = zeros(Nz, Nx);
 
 ca = cos(alpha);  sa = sin(alpha);
 off = (0:Nch-1) * Nt;                   % 各通道在线性索引中的偏移
-dxe = P.xe;                             % 1 x N 阵元坐标
+dxe = P.elementX;                       % 1 x N 阵元坐标
 
 for k = 1:Nx                            % 一次算一条线（内存受限）
     xc = x(k);
     axc = abs(dxe - xc);                % 阵元到像素的横向距离，1 x N
-    hw  = z / (2*P.Fnum);               % 各深度的半孔径宽度，Nz x 1
+    hw  = z / (2*P.fNumber);            % 各深度的半孔径宽度，Nz x 1
     m   = axc <= hw;                    % Nz x N 孔径掩膜（隐式扩展）
 
     % Field II 返回的每个通道都把自己的发射延时加在了时间轴上（E0 实测：
     % 带此项残差 0.01 µs，不带则 1.2 µs）。所以延时必须包含这一项。
-    tau = (z*ca + xc*sa)/P.c + sqrt(z.^2 + (dxe - xc).^2)/P.c ...
-          + dxe*sa/P.c + dt;
-    pos = (tau - t0) * P.fs + 1;        % 1 基的（小数）采样下标
+    tau = (z*ca + xc*sa)/P.soundSpeed + sqrt(z.^2 + (dxe - xc).^2)/P.soundSpeed ...
+          + dxe*sa/P.soundSpeed + dt;
+    pos = (tau - t0) * P.sampleRate + 1;   % 1 基的（小数）采样下标
 
     i0 = floor(pos);                    % 左侧相邻采样
     fr = pos - i0;                      % 插值权重，[0,1)

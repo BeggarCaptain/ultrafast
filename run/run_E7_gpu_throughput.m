@@ -3,7 +3,7 @@ function run_E7_gpu_throughput()
 %
 %   这里测什么
 %   ----------
-%   把“一帧 71 角度的通道数据”处理成一张 B 模式图，在 CPU 上和在 GPU 上各需要
+%   把“一帧 11 角度的通道数据”处理成一张 B 模式图，在 CPU 上和在 GPU 上各需要
 %   多少墙钟时间，并换算成“算法处理帧率”（每秒能处理多少帧）。
 %
 %   这不是什么
@@ -57,7 +57,7 @@ end
 fprintf('GPU: %s\n', gpuInfo);
 
 % -------------------------------------------------------------- 读入一帧
-% 71 个通道记录（每个约 1.2 MB，single）构成一帧的输入。
+% 11 个通道记录（每个约 1.2 MB，single）构成一帧的输入。
 chs = cell(1, P.nAngles);
 t0s = zeros(1, P.nAngles);  dts = zeros(1, P.nAngles);
 for i = 1:P.nAngles
@@ -66,7 +66,7 @@ for i = 1:P.nAngles
 end
 fprintf('frame size: %d x %d per angle, %d angles\n', size(chs{1}), P.nAngles);
 
-nList = P.e7.nList;  nWarm = P.e7.warmup;  nRep = P.e7.repeat;
+nList = P.gpuBench.counts;  nWarm = P.gpuBench.warmup;  nRep = P.gpuBench.repeat;
 res = struct('gpu', gpuInfo, 'nList', nList, ...
              'cpu', nan(1,numel(nList)), 'gpuC', nan(1,numel(nList)), ...
              'gpuE', nan(1,numel(nList)), 'nrmse', nan(1,numel(nList)));
@@ -121,7 +121,7 @@ end
 
 save(fullfile(outdir, 'e7_throughput.mat'), '-struct', 'res');
 if hasGPU
-    plot_e7(res, fullfile(P.figDir, 'F15_e7_throughput.png'));
+    plot_e7(res, fullfile(P.figureDir, 'F15_e7_throughput.png'));
 end
 end
 
@@ -129,10 +129,10 @@ end
 function img = pipeline_cpu(chs, idx, t0s, dts, P)
 %PIPELINE_CPU  CPU 上的一帧：DAS -> 相干求和 -> 包络 -> dB。
 %   这就是生产算法本身，因此计时有代表性，而不是某个内核的微基准。
-S = zeros(numel(P.z), numel(P.x), 'single');
+S = zeros(numel(P.imageZ), numel(P.imageX), 'single');
 for j = 1:numel(idx)
     i = idx(j);
-    S = S + das_pw(chs{i}, t0s(i), P.angles(i), P, P.x, P.z, dts(i));
+    S = S + das_pw(chs{i}, t0s(i), P.angles(i), P, P.imageX, P.imageZ, dts(i));
 end
 A = abs(hilbert(double(S)));                       % 求和之后再取包络
 img = 20*log10(max(A, realmin) / max(A(:)));       % 对数压缩，峰值为 0 dB
@@ -141,7 +141,7 @@ end
 function img = pipeline_gpu(gch, idx, t0s, dts, P)
 %PIPELINE_GPU  同样的流水线，全部数组都在显存里。
 %   hilbert 直接在 gpuArray 上执行，包络留在显存，直到调用者 gather 才过总线。
-S = gpuArray.zeros(numel(P.z), numel(P.x), 'single');
+S = gpuArray.zeros(numel(P.imageZ), numel(P.imageX), 'single');
 for j = 1:numel(idx)
     i = idx(j);
     S = S + das_pw_gpu(gch{j}, t0s(i), P.angles(i), P, dts(i));
@@ -160,7 +160,7 @@ end
 function idx = subset_idx(P, n)
 %SUBSET_IDX  角度数为 n 的那个复合档位的下标集合。
 S = subset_indices(P);
-idx = S{P.subsetN == n};
+idx = S{P.compoundCounts == n};
 end
 
 function plot_e7(res, fname)

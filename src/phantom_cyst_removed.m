@@ -19,14 +19,14 @@ function [pos, amp, sel] = phantom_cyst_removed(P, pos0, amp0)
 %   各 199 次发射）就同时得到两个体模，省掉第三次全量仿真。相减是在波束形成
 %   之后、取包络之前做的（见 stage_analysis），因此严格成立。
 %
-%   九个囊肿是 P.cystX 与 P.cystZ 的笛卡尔积（3 x 3）；如果只取其中三个
+%   九个囊肿是 P.cystCenterX 与 P.cystCenterZ 的笛卡尔积（3 x 3）；如果只取其中三个
 %   （早期版本的一个 bug），所谓“无回声体模”里还剩六个囊肿，对比度测量就废了。
 
 C = cyst_centres(P);                        % 9 x 2 [x z]
 sel = false(size(pos0, 1), 1);
 for k = 1:size(C, 1)
     d2 = (pos0(:,1) - C(k,1)).^2 + (pos0(:,3) - C(k,2)).^2;   % 平面内距离平方
-    sel = sel | (d2 <= P.cystR^2);          % 落在该囊肿内（九个取并集）
+    sel = sel | (d2 <= P.cystRadius^2);          % 落在该囊肿内（九个取并集）
 end
 pos = pos0(sel, :);                         % 需要被移除的散射子
 amp = amp0(sel);

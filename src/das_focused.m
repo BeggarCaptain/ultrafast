@@ -34,14 +34,14 @@ if nargin < 6 || isempty(dt), dt = 0; end
 z = z(:);                       % 强制深度为列向量
 [Nt, Nch] = size(rf);
 Nz = numel(z);
-dxe = abs(P.xe - xf);           % 1 x N，阵元到该线的距离
-hw  = z / (2*P.Fnum);           % Nz x 1，动态接收半孔径
+dxe = abs(P.elementX - xf);           % 1 x N，阵元到该线的距离
+hw  = z / (2*P.fNumber);           % Nz x 1，动态接收半孔径
 m   = dxe <= hw;                % Nz x N 接收孔径掩膜
 off = (0:Nch-1) * Nt;           % 各通道线性索引偏移
 
-tau = (z + sqrt(z.^2 + dxe.^2))/P.c + dt ...
-      + (sqrt(xf^2 + P.txFocus^2) - sqrt((xf - P.xe).^2 + P.txFocus^2))/P.c;
-pos = (tau - t0) * P.fs + 1;    % 小数采样下标
+tau = (z + sqrt(z.^2 + dxe.^2))/P.soundSpeed + dt ...
+      + (sqrt(xf^2 + P.txFocusDepth^2) - sqrt((xf - P.elementX).^2 + P.txFocusDepth^2))/P.soundSpeed;
+pos = (tau - t0) * P.sampleRate + 1;    % 小数采样下标
 i0  = floor(pos);
 fr  = pos - i0;
 m   = m & (i0 >= 1) & (i0 < Nt);

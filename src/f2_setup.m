@@ -1,11 +1,27 @@
-function Th = f2_setup(P)
+function [Th, ThR] = f2_setup(P)
 %F2_SETUP  初始化 Field II 并建立 128 阵元线阵。
 %
 %   Th = F2_SETUP(P) 返回换能器句柄，激励与冲激响应都已装载，可直接调用
 %   calc_scat_multi / calc_hp。
 %
+%   [Th, ThR] = F2_SETUP(P) 额外返回**接收孔径**句柄。Field II 3.x 里一个句柄
+%   同时携带发射和接收的变迹/延时，用同一个句柄做脉冲回波会让发射窗（聚焦模
+%   式下只有 52 个阵元）顺带把接收通道也加权，接收孔径被截断；因此扫描采集
+%   用两个几何完全相同的句柄：Th 负责发射（可加窗、可聚焦），ThR 只负责接收
+%   （变迹恒为单位，128 通道原样返回），接收端的动态孔径由自写 DAS 施加。
+%
 %   本函数可以在同一个 MATLAB 会话里反复调用：每次都会重新初始化 Field II
 %   并从头建立阵列，因此采集、噪声、声场各阶段都从确定的状态开始。
+%
+%   注意：field_init 会重置 Field II 的全局状态，先前建立的句柄随之失效，所以
+%   必须先调用本函数、再建立任何别的东西。
+%
+%   警告：被重置的不只是句柄，还有 set_field 设过的**库级开关**。最容易踩的是
+%   衰减：set_field('use_att',1) + set_field('att',...) 一旦被下一次 f2_setup 里的
+%   field_init 冲掉，衰减就**静默失效**——不报错，只是结果变了。实测（本机 3.30）：
+%   开 1 dB/cm 时 30 mm 处幅度降 0.7%，再调一次 f2_setup 后精确回到无衰减值。
+%   本项目的基线刻意不开衰减，所以目前没有这个风险；将来若要开启，必须写在调用
+%   本函数**之后**，或者把设置搬进本函数内部。
 %
 %   重要：这里刻意从不调用 field_end。在本机这套 Field II 版本上，
 %   “field_end 之后再 field_init”会把 MATLAB 进程直接搞崩（曾经杀死过交互会话）；
@@ -13,9 +29,10 @@ function Th = f2_setup(P)
 %
 %   脉冲设计
 %   --------
-%   波束形成看到的“两程”脉冲，近似等于换能器冲激响应被作用两次，所以单程高斯
-%   必须比目标结果更短、载频更高。取 sigma = 0.32/f0、载频 4.90 MHz 时，两程
-%   脉冲实测为 4.45 MHz / 62.8 % 带宽，与论文一致（E0 会验证）。
+%   发射的是论文标称的 4.50 MHz、sigma = 0.32 个载波周期、窗长 5 个周期的高斯
+%   包络正弦。两程回波在频域上是单程谱的平方再乘孔径的空间响应，中心会下移到
+%   约 4.12 MHz、半功率带宽约 62 %；这个下移来自裸阵元没有电-机带通整形，E0
+%   记录在案（报告 3.1 节），不再靠抬高载频去补偿。
 
 % ---- 确保 Field II 工具箱在搜索路径上 -----------------------------------
 if exist('field_init', 'file') ~= 2
@@ -24,8 +41,8 @@ end
 
 % ---- 库级设置 -----------------------------------------------------------
 field_init(-1);             % -1 表示关闭 Field II 的图形输出
-set_field('c', P.c);        % 所有延时计算使用的声速
-set_field('fs', P.fs);      % 返回信号的采样率
+set_field('c', P.soundSpeed);        % 所有延时计算使用的声速
+set_field('fs', P.sampleRate);      % 返回信号的采样率
 set_field('show_times', 0); % 不打印各步骤耗时
 
 % ---- 线阵几何 -----------------------------------------------------------
@@ -37,19 +54,37 @@ set_field('show_times', 0); % 不打印各步骤耗时
 % 子阵元，高度方向无法产生延时剖面；实测把该值改成 30 mm 后，三个不同位置
 % （轴上与离轴）的 calc_scat_multi 输出与原配置逐位相同，最大差值为 0。既然
 % 它从不起作用，配置里就不保留这个参数。
-Th = xdc_linear_array(P.N, P.width, P.height, P.kerf, 1, 1, [0 0 0]);
+Th = xdc_linear_array(P.nElements, P.elemWidth, P.elemHeight, P.elemKerf, 1, 1, [0 0 0]);
 
 % ---- 脉冲：高斯包络正弦，存为冲激响应 -----------------------------------
-fc  = P.pulseCarrier;                              % 单程脉冲载频 [Hz]
-t   = (0:round(P.pulseHalfLen/fc*P.fs))' / P.fs;   % 脉冲时间轴 [s]
-sig = P.pulseSigma / fc;                           % 高斯 sigma [s]
-imp = exp(-((t - 3/fc).^2) / (2*sig^2)) .* sin(2*pi*fc*(t - 3/fc));
+% 波形本身由 pulse_waveform 统一给出（图 F2 也调用它），这里只管怎么交给
+% Field II。两个约定的理由写在那个函数里：峰位在第 3 个载波周期（头部余量要在
+% 3 个周期左右，σ 调大时才不会被截断），右侧留 6σ 尾巴。窗长是派生量、
+% 不可辨识——5/6/8 个周期给出同一条脉冲。
+imp = pulse_waveform(P);    % [Nt x 1] 单程发射脉冲
 
 xdc_impulse(Th, imp');      % Field II 要求行向量，这里转置
-xdc_excitation(Th, 1);      % 单位冲激激励：单程脉冲就等于 imp
+xdc_excitation(Th, 1);      % 单位冲激激励：单程声压波形就等于 imp
 
 % ---- 全孔径、不变迹（与论文一致），焦点归零 -----------------------------
-xdc_apodization(Th, 1, ones(1, P.N));   % 发射：所有阵元参与
-xdc_apodization(Th, 2, ones(1, P.N));   % 接收：硬件不做加窗
+% xdc_apodization 的第二个参数是时间线 [s]：该行变迹从这一刻起生效，不是通道
+% 选择（曾误当成 1=发射、2=接收）。同一个句柄的发射与接收共用一套变迹，所以
+% 这里只需一次调用；给 0 表示整条记录都有效。写成 1 s、2 s 也能跑出同样的结果
+% （实测逐位相同，计算时取的是第一条），但那是实现细节，不能依赖。
+xdc_apodization(Th, 0, ones(1, P.nElements));   % 全孔径、矩形窗
 xdc_center_focus(Th, [0 0 0]);          % 中性初始焦点
+
+% ---- 接收孔径：同一几何、同一冲激响应，但变迹永远是单位 -----------------
+% 只在调用者要第二个输出时建立，省掉纯发射场合（calc_hp 一类）的开销。
+% 它不加窗、也不自己聚焦：接收端的动态孔径（F#=1.75）由 das_pw/das_focused
+% 在波束形成时施加，这样 128 通道的时间基准和幅度权都保持原始。
+% 延时仍要跟发射句柄设成同一个 d——Field II 会把延时同时写进每条通道的时间
+% 轴，DAS 里再把它加回来，两边必须一致，否则图像会错位（报告 6.1）。
+if nargout > 1          % 检查有几个返回值
+    ThR = xdc_linear_array(P.nElements, P.elemWidth, P.elemHeight, P.elemKerf, 1, 1, [0 0 0]);
+    xdc_impulse(ThR, imp');             % 与发射端相同的单程脉冲
+    xdc_excitation(ThR, 1);
+    xdc_apodization(ThR, 0, ones(1, P.nElements));
+    xdc_center_focus(ThR, [0 0 0]);
+end
 end

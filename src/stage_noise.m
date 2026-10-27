@@ -25,9 +25,19 @@ function stage_noise(P, kind)
 C = load(fullfile(P.dataDir, 'calib.mat'));
 outdir = fullfile(P.dataDir, 'noise');
 if ~exist(outdir, 'dir'), mkdir(outdir); end
+stamp_guard(P);                  % 参数变了就拒绝复用旧噪声（见 stamp_guard）
 sig = C.sigma_e;                 % stage_sigma 标定出的通道噪声标准差
-Th  = f2_setup(P);               % 这里不发波，只是让 Field II 状态保持一致
-rng(7, 'twister');               % 固定种子：噪声同样可复现
+% 本阶段完全不碰 Field II：噪声由 randn 生成，波束形成走自写的 das_pw。
+% （早先这里有一次 f2_setup(P) 调用，注释写的是“让 Field II 状态保持一致”，但本
+%  函数之后没有任何 Field II 调用，那行纯属空转，已删除。）
+%
+% 随机种子按“角度 / 线”单独设定，不共用一条全局流
+% ----------------------------------------------
+% 这个循环是可断点续跑的：文件已存在就 continue。若把 randn 写成一条从头发到尾的
+% 全局流，那么“被跳过的文件不消耗随机数”，于是只补一个角度时它拿到的是全局第 1
+% 次抽样、而不是它本来那一次——同一个文件在不同补跑顺序下内容不同，可复现性就没了。
+% 改成每个角度用自己的种子之后，第 i 个角度的实现只由 i 决定，与跑的顺序、与哪些
+% 文件已经存在完全无关。
 
 if strcmp(kind, 'pw')
     % ---- 每个平面波角度生成一帧噪声 ------------------------------------
@@ -39,8 +49,9 @@ if strcmp(kind, 'pw')
         Nt = size(S0.img, 1);
         if isfield(S0, 'ch'), Nt = size(S0.ch, 1); end   % 用真实的通道记录长度
 
-        nz = sig * randn(Nt, P.N);                       % 每个阵元、每个角度独立
-        [img, ~] = das_pw(nz, S0.t0, S0.alpha, P, P.x, P.z, S0.dt);
+        rng(7 + i, 'twister');                           % 本角度独占种子，见文件头
+        nz = sig * randn(Nt, P.nElements);                       % 每个阵元、每个角度独立
+        [img, ~] = das_pw(nz, S0.t0, S0.alpha, P, P.imageX, P.imageZ, S0.dt);
 
         S = struct('img', single(img), 'tag', 'N1', 'alpha', S0.alpha);
         save(fs_, '-struct', 'S');
@@ -48,7 +59,7 @@ if strcmp(kind, 'pw')
     end
 else
     % ---- 每条聚焦线生成一帧噪声 ----------------------------------------
-    for k = 1:P.txLines
+    for k = 1:P.nTxLines
         fs_ = fullfile(outdir, sprintf('NF_l%03d.mat', k));
         if exist(fs_, 'file'), continue; end
 
@@ -64,12 +75,13 @@ else
             Nt = size(Sp.ch, 1);                         % 同一体模、同一距离范围
         end
 
-        nz = sig * randn(Nt, P.N);
-        [img, ~] = das_focused(nz, S0.t0, S0.xf, P, P.z, S0.dt);
+        rng(1007 + k, 'twister');                        % 本线独占种子，见文件头
+        nz = sig * randn(Nt, P.nElements);
+        [img, ~] = das_focused(nz, S0.t0, S0.xf, P, P.imageZ, S0.dt);
 
         S = struct('img', single(img), 'tag', 'NF', 'xf', S0.xf);
         save(fs_, '-struct', 'S');
-        if mod(k,20)==0, fprintf('[noise-foc] %d/%d\n', k, P.txLines); end
+        if mod(k,20)==0, fprintf('[noise-foc] %d/%d\n', k, P.nTxLines); end
     end
 end
 end

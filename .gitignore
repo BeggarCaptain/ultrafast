@@ -11,8 +11,10 @@ data/**/*.mat
 data/**/*.bin
 data/**/*.h5
 data/**/*.log
+data/logs/
 figures/**/*.fig
 figures/**/*.pdf
+figures/_*.png
 
 # Keep directory placeholders
 !**/.gitkeep

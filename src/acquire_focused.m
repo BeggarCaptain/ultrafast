@@ -1,10 +1,11 @@
-function [rf, t0, d] = acquire_focused(Th, P, xf, pos, amp)
+function [rf, t0, d] = acquire_focused(Th, ThR, P, xf, pos, amp)
 %ACQUIRE_FOCUSED  一次聚焦发射，返回 128 通道原始射频。
 %
-%   [RF, T0, D] = ACQUIRE_FOCUSED(TH, P, XF, POS, AMP)
+%   [RF, T0, D] = ACQUIRE_FOCUSED(TH, THR, P, XF, POS, AMP)
 %
 %   输入
-%     Th   ：Field II 换能器句柄（由 f2_setup 生成）
+%     Th   ：发射句柄（由 f2_setup 生成）；本函数会把 52 阵元发射窗加在它上面
+%     ThR  ：接收句柄（同一几何，变迹恒为单位，只设与发射相同的延时）
 %     P    ：参数结构体
 %     xf   ：该条扫描线的横向位置 [m]
 %     pos  ：N x 3 散射子坐标 [m]
@@ -17,26 +18,38 @@ function [rf, t0, d] = acquire_focused(Th, P, xf, pos, amp)
 %
 %   发射孔径
 %   --------
-%   以 XF 为中心、宽 P.txApodW = 17.14 mm 的矩形窗，即 52 个阵元，焦点处
+%   以 XF 为中心、宽 P.txApodWidth = 17.14 mm 的矩形窗，即 52 个阵元，焦点处
 %   F 数 = 30/17.14 = 1.75（论文取值）。靠近阵列两端时窗口会被物理孔径截断，
 %   这就是设计里说的“边缘线自动裁剪”。
+%
+%   为什么接收要单独一个句柄
+%   ----------------------
+%   Field II 3.x 的一个句柄同时携带发射和接收的变迹。若收发共用句柄，上面这个
+%   52 阵元窗会把接收通道也一起加权：30 mm 处窗口与 F#=1.75 的接收孔径恰好重
+%   合、看不出问题，但 55 mm 处 DAS 需要约 95 个通道，实际只有 52 个非零，等效
+%   接收 F 数从 1.75 恶化到 3.2。所以接收端用独立句柄、变迹恒为单位，128 通道
+%   原样交给 das_focused，接收动态孔径完全由 DAS 施加。
 %
 %   为什么这里要显式给延时
 %   ----------------------
 %   xdc_focus 也能算出同样的延时，但它不返回这个向量。DAS 需要一模一样的
-%   向量，因为 Field II 会把发射延时加到每个通道的时间轴上（E0 实测：带这一项
+%   向量，因为 Field II 会把延时加到每个通道的时间轴上（E0 实测：带这一项
 %   残差 0.01 µs，不带则 1.2 µs）。在这里算出 d、再在 das_focused 里加回去，
 %   发射与接收的时间基准才一致。
 
-F = [xf 0 P.txFocus];                                  % 焦点坐标 [m]
+F = [xf 0 P.txFocusDepth];                                  % 焦点坐标 [m]
 % d(x1) = (|F| - |F - x1|)/c：离焦点越远的阵元越早发射
-d = (norm(F) - sqrt((P.xe - xf).^2 + P.txFocus^2)) / P.c;
+d = (norm(F) - sqrt((P.elementX - xf).^2 + P.txFocusDepth^2)) / P.soundSpeed;
 
+% 时间线参数 0 = “从 t=0 起生效”，不是通道编号。收发两个句柄的延时必须相同。
 xdc_center_focus(Th, [0 0 0]);                         % 清掉上一次的焦点
-xdc_focus_times(Th, 1, d);                             % 1：仅发射
+xdc_focus_times(Th, 0, d);                             % 发射聚焦延时
+apo = double(abs(P.elementX - xf) <= P.txApodWidth/2 + 1e-12);   % 52 阵元矩形窗，边缘自动截断
+xdc_apodization(Th, 0, apo);                           % 只作用在发射上
 
-apo = double(abs(P.xe - xf) <= P.txApodW/2 + 1e-12);   % 52 阵元矩形窗，边缘自动截断
-xdc_apodization(Th, 1, apo);                           % 施加在发射上
+xdc_center_focus(ThR, [0 0 0]);
+xdc_focus_times(ThR, 0, d);                            % 与发射端相同的时间基准
+xdc_apodization(ThR, 0, ones(1, P.nElements));                 % 接收：全孔径、不变迹
 
-[rf, t0] = calc_scat_multi(Th, Th, pos, amp);          % 脉冲回波通道数据
+[rf, t0] = calc_scat_multi(Th, ThR, pos, amp);         % 脉冲回波通道数据
 end

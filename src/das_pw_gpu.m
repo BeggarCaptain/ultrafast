@@ -14,24 +14,24 @@ function img = das_pw_gpu(rf, t0, alpha, P, dt)
 %   把延时表预先算好常驻显存是合理的进一步优化，但那样报出的就不是本文的算法
 %   速度了。
 
-z = P.z(:);  x = P.x(:).';              % 深度为列，横向为行
+z = P.imageZ(:);  x = P.imageX(:).';              % 深度为列，横向为行
 [Nt, Nch] = size(rf);
 Nz = numel(z);  Nx = numel(x);
 
 img = gpuArray.zeros(Nz, Nx, 'single');
 ca = cos(alpha);  sa = sin(alpha);
 off = gpuArray((0:Nch-1) * Nt);         % 通道偏移，常驻显存
-dxe = gpuArray(P.xe);                   % 阵元坐标，同样常驻显存
+dxe = gpuArray(P.elementX);                   % 阵元坐标，同样常驻显存
 
 for k = 1:Nx                            % 与 CPU 一样，一次一条线
     xc  = x(k);
     dxc = dxe - xc;                     % 阵元到像素的距离（gpuArray）
-    hw  = z / (2*P.Fnum);               % 动态接收孔径
+    hw  = z / (2*P.fNumber);               % 动态接收孔径
     m   = abs(dxc) <= hw;               % Nz x N 孔径掩膜
 
     % 与 das_pw 完全相同的四项，包含 Field II 发射延时修正项。
-    tau = (z*ca + xc*sa)/P.c + sqrt(z.^2 + dxc.^2)/P.c + dxc*sa/P.c + dt;
-    pos = (tau - t0) * P.fs + 1;        % 小数采样下标
+    tau = (z*ca + xc*sa)/P.soundSpeed + sqrt(z.^2 + dxc.^2)/P.soundSpeed + dxc*sa/P.soundSpeed + dt;
+    pos = (tau - t0) * P.sampleRate + 1;        % 小数采样下标
 
     i0 = floor(pos);
     fr = pos - i0;

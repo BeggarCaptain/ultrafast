@@ -1,5 +1,5 @@
 function make_fig_pointtargets()
-%MAKE_FIG_POINTTARGETS  图 F14：8 个点目标的三方法成像 + 真实位置标注。
+%MAKE_FIG_POINTTARGETS  图 F13：8 个点目标的三方法成像 + 真实位置标注。
 %
 %   直接读取已经采集好的 P3 数据（data/pw/P3_a###.mat、data/foc/P3_l###.mat），
 %   不重新跑任何 Field II 仿真。做三件事：
@@ -23,7 +23,7 @@ P = params(root);
 
 % ---------------------------------------------------------------- 读数据
 % PW：只取 0° 那一次
-S0  = load(fullfile(P.dataDir, 'pw', sprintf('P3_a%03d.mat', P.iZero)));
+S0  = load(fullfile(P.dataDir, 'pw', sprintf('P3_a%03d.mat', P.zeroAngleIndex)));
 rfPW = double(S0.img);
 
 % C11：11 个角度的射频直接相加（仍在射频域）
@@ -35,8 +35,8 @@ end
 rfC = double(rfC);
 
 % 单焦点：256 条线拼成图像
-rfF = zeros(numel(P.z), numel(P.xpsf), 'single');
-for k = 1:numel(P.xpsf)
+rfF = zeros(numel(P.imageZ), numel(P.psfLineX), 'single');
+for k = 1:numel(P.psfLineX)
     S = load(fullfile(P.dataDir, 'foc', sprintf('P3_l%03d.mat', k)));
     rfF(:,k) = S.img;
 end
@@ -62,37 +62,37 @@ nt = numel(xt);
 % 报告里用 fit，raw 用来说明“误差来自网格，不是波束形成”。
 res = zeros(nt, 7);                       % [dxRaw dzRaw dxFit dzFit w10 w6]
 for q = 1:nt
-    ix = find(abs(P.x - xt(q)) <= 1.5e-3);
-    iz = find(abs(P.z - zt(q)) <= 1.0e-3);
+    ix = find(abs(P.imageX - xt(q)) <= 1.5e-3);
+    iz = find(abs(P.imageZ - zt(q)) <= 1.0e-3);
     if isempty(ix) || isempty(iz), continue; end
     E = envC(iz, ix);
     [~, im] = max(E(:));
     [r, c] = ind2sub(size(E), im);
 
     % ---- 粗读数：像素中心
-    xRaw = P.x(ix(c));  zRaw = P.z(iz(r));
+    xRaw = P.imageX(ix(c));  zRaw = P.imageZ(iz(r));
 
     % ---- 亚像素：三点抛物线（只有峰值不在窗口边缘时才能做）
     r0 = iz(1) + r - 1;  c0 = ix(1) + c - 1;
-    xFit = P.x(c0);  zFit = P.z(r0);
-    if c0 > 1 && c0 < numel(P.x)
+    xFit = P.imageX(c0);  zFit = P.imageZ(r0);
+    if c0 > 1 && c0 < numel(P.imageX)
         a = envC(r0, c0-1);  b = envC(r0, c0);  d = envC(r0, c0+1);
         den = a - 2*b + d;
-        if abs(den) > 0, xFit = P.x(c0) + 0.5*(a-d)/den*P.dx; end
+        if abs(den) > 0, xFit = P.imageX(c0) + 0.5*(a-d)/den*P.pixelPitchX; end
     end
-    if r0 > 1 && r0 < numel(P.z)
+    if r0 > 1 && r0 < numel(P.imageZ)
         a = envC(r0-1, c0);  b = envC(r0, c0);  d = envC(r0+1, c0);
         den = a - 2*b + d;
-        if abs(den) > 0, zFit = P.z(r0) + 0.5*(a-d)/den*P.dz; end
+        if abs(den) > 0, zFit = P.imageZ(r0) + 0.5*(a-d)/den*P.pixelPitchZ; end
     end
 
     res(q,1) = xRaw - xt(q);  res(q,2) = zRaw - zt(q);
     res(q,3) = xFit - xt(q);  res(q,4) = zFit - zt(q);
 end
 
-% 轴向/横向宽度用统一的指标函数（与报告 T-B/T-C 同口径）
+% 轴向/横向宽度用统一的指标函数（与报告 T-B 同口径）
 for q = 1:nt
-    m = metrics_resolution(single(envC), P.x, P.z, xt(q), zt(q));
+    m = metrics_resolution(single(envC), P.imageX, P.imageZ, xt(q), zt(q));
     res(q,5) = m.w10;  res(q,6) = m.w6;
 end
 
@@ -106,7 +106,7 @@ for q = 1:nt
         res(q,5)*1e3, res(q,6)*1e3);
 end
 fprintf('  raw : |dx| max %4.0f um, |dz| max %3.0f um  (grid dx/2 = %.0f um)\n', ...
-    max(abs(res(:,1)))*1e6, max(abs(res(:,2)))*1e6, P.dx/2*1e6);
+    max(abs(res(:,1)))*1e6, max(abs(res(:,2)))*1e6, P.pixelPitchX/2*1e6);
 fprintf('  fit : |dx| max %4.0f um, |dz| max %3.0f um\n', ...
     max(abs(res(:,3)))*1e6, max(abs(res(:,4)))*1e6);
 
@@ -122,36 +122,36 @@ end
 fclose(fid);
 
 % ------------------------------------------------------------------ 画图
-dbPW = to_db(envPW, P.drDB);
-dbC  = to_db(envC,  P.drDB);
-dbF  = to_db(envF,  P.drDB);
+dbPW = to_db(envPW, P.displayRangeDB);
+dbC  = to_db(envC,  P.displayRangeDB);
+dbF  = to_db(envF,  P.displayRangeDB);
 
 fig = figure('Position', [80 80 1150 760]);
 
 % ---- 上排：全场 ----
 imgs = {dbPW, dbC, dbF};
 ttls = {'PW (n=1)', 'C11 (n=11)', 'focused (256 lines)'};
-xs   = {P.x, P.x, P.xpsf};
+xs   = {P.imageX, P.imageX, P.psfLineX};
 for q = 1:3
     subplot(2,3,q);
-    imagesc(xs{q}*1e3, P.z*1e3, imgs{q}); axis image; colormap(gca, gray);
-    caxis([-P.drDB 0]); hold on;
+    imagesc(xs{q}*1e3, P.imageZ*1e3, imgs{q}); axis image; colormap(gca, gray);
+    caxis([-P.displayRangeDB 0]); hold on;
     plot(xt*1e3, zt*1e3, 'ro', 'MarkerSize', 12, 'LineWidth', 1.2);   % 真实位置
     xlabel('x (mm)'); ylabel('z (mm)'); title(ttls{q});
 end
 
 % ---- 下排：30 mm 处放大，十字标真实位置 ----
 z0 = 30e-3;  x0 = 0;
-iz = abs(P.z - z0) <= 2.5e-3;
-ix = abs(P.x - x0) <= 3e-3;
+iz = abs(P.imageZ - z0) <= 2.5e-3;
+ix = abs(P.imageX - x0) <= 3e-3;
 for q = 1:3
     subplot(2,3,3+q);
-    imagesc(xs{q}(ix)*1e3, P.z(iz)*1e3, imgs{q}(iz, ix)); axis image;
+    imagesc(xs{q}(ix)*1e3, P.imageZ(iz)*1e3, imgs{q}(iz, ix)); axis image;
     colormap(gca, gray); caxis([-40 0]); hold on;
     plot(x0*1e3, z0*1e3, 'r+', 'MarkerSize', 14, 'LineWidth', 1.4);
     xlabel('x (mm)'); ylabel('z (mm)');
     title(sprintf('%s, zoom at (0, 30) mm', ttls{q}), 'FontSize', 9);
 end
-save_fig(fig, fullfile(P.figDir, 'F14_point_targets.png')); close(fig);
-fprintf('saved %s\n', fullfile(P.figDir, 'F14_point_targets.png'));
+save_fig(fig, fullfile(P.figureDir, 'F13_point_targets.png')); close(fig);
+fprintf('saved %s\n', fullfile(P.figureDir, 'F13_point_targets.png'));
 end
