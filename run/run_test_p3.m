@@ -5,15 +5,23 @@ function run_test_p3()
 %   不存在）、用两种发射模式采集 8 个点目标、测量 PSF，并输出一张两联的调试图。
 %   总耗时约 5 分钟。
 %
-%   什么样的结果算“通过”
-%   --------------------
+%   什么样的结果算“通过”（括号内是本机实测）
+%   ----------------------------------------
 %     * 两种模式都把 30 mm 处的目标重建在 30.00 ± 0.05 mm（否则时间零点或延时
 %       模型有问题）；
-%     * 单平面波 -10 dB 横向约 1.0 mm；聚焦约 0.8 mm；轴向约 0.19 mm；
+%     * 单平面波 −6 dB 横向约 0.85 mm（实测 0.85）；聚焦约 0.64 mm（焦点处），
+%       轴向 −6 dB 约 0.19 mm；
 %     * 聚焦线 128 个接收通道全部非零（说明接收句柄没有被发射窗加权）。
+%   注意 0.7 mm 是 11 角度复合后的值，不是单平面波；两处指标不要混用。
 %
 %   Field II 时间轴的问题（DAS 里漏掉 +x1 sin(alpha)/c）在这里表现为几个毫米的
 %   横向偏移；在 8 个散射子上排查，比在两万个散射子上排查容易得多。
+%
+%   为什么值得先花这 5 分钟
+%   ----------------------
+%   后面 P1 采集要跑近一小时，而它一旦开始，任何延时/符号错误都会以"全部数据
+%   都要重跑"的形式暴露。P3 只有 8 个散射子，两种模式加起来几分钟，却正好覆盖
+%   了整条链路上所有可能出错的环节：发射延时、接收孔径、DAS、包络、指标。
 
 here = fileparts(mfilename('fullpath'));   % .../ultrafast/run
 root = fileparts(here);
@@ -38,11 +46,13 @@ acquire_all_pw(P, 'P3', pp, pa, false);
 acquire_all_focused(P, 'P3', pp, pa, P.psfLineX, false);
 
 % ---- 拼接与测量 --------------------------------------------------------
+% 只取中心角度（alpha = 0）做初步检查：它没有偏转，任何误差都不会被"倾斜波前"
+% 掩盖，最容易暴露延时模型的问题。
 Sp = load(fullfile(P.dataDir,'pw',sprintf('P3_a%03d.mat', P.zeroAngleIndex)));   % 中心角度（alpha = 0）
 env = abs(hilbert(double(Sp.img)));
 m = metrics_resolution(env, P.imageX, P.imageZ, 0, 30e-3);
-fprintf('PW 0 deg : peak (%.2f, %.2f) mm, w10 %.2f mm, w6 %.2f mm\n', ...
-    m.xpk*1e3, m.zpk*1e3, m.w10*1e3, m.w6*1e3);
+fprintf('PW 0 deg : peak (%.2f, %.2f) mm, wLat %.2f mm, wAx %.2f mm\n', ...
+    m.xpk*1e3, m.zpk*1e3, m.wLat*1e3, m.wAx*1e3);
 
 foc = zeros(numel(P.imageZ), numel(P.psfLineX));              % 拼 256 条线
 for k = 1:numel(P.psfLineX)
@@ -51,8 +61,8 @@ for k = 1:numel(P.psfLineX)
 end
 envF = abs(hilbert(double(foc)));
 mF = metrics_resolution(envF, P.psfLineX, P.imageZ, 0, 30e-3);
-fprintf('focused  : peak (%.2f, %.2f) mm, w10 %.2f mm, w6 %.2f mm\n', ...
-    mF.xpk*1e3, mF.zpk*1e3, mF.w10*1e3, mF.w6*1e3);
+fprintf('focused  : peak (%.2f, %.2f) mm, wLat %.2f mm, wAx %.2f mm\n', ...
+    mF.xpk*1e3, mF.zpk*1e3, mF.wLat*1e3, mF.wAx*1e3);
 
 % ---- 接收孔径检查 ------------------------------------------------------
 % 接收端是一个变迹恒为单位的独立句柄，所以 128 个通道都应当有信号。若收发共用
@@ -73,10 +83,10 @@ end
 fig = figure('Position',[100 100 900 420]);
 subplot(1,2,1);
 imagesc(P.imageX*1e3, P.imageZ*1e3, to_db(env,P.displayRangeDB)); axis image; colormap(gca,gray);
-caxis([-P.displayRangeDB 0]); xlabel('x (mm)'); ylabel('z (mm)'); title('PW, 0 deg');
+caxis([-P.displayRangeDB 0]); xlabel('x (mm)'); ylabel('z (mm)'); title('单平面波，0°');
 subplot(1,2,2);
 imagesc(P.psfLineX*1e3, P.imageZ*1e3, to_db(envF,P.displayRangeDB)); axis image; colormap(gca,gray);
-caxis([-P.displayRangeDB 0]); xlabel('x (mm)'); ylabel('z (mm)'); title('focused, 30 mm');
+caxis([-P.displayRangeDB 0]); xlabel('x (mm)'); ylabel('z (mm)'); title('常规聚焦，30 mm');
 save_fig(fig, fullfile(P.figureDir,'_debug_p3.png'), 150);
 
 fprintf('=== P3 test done ===\n');

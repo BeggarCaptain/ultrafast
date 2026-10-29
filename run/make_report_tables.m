@@ -6,12 +6,18 @@ function make_report_tables()
 %
 %   生成的表
 %     T-A ：E0 标定与自检
-%     T-B ：横向分辨率（-10 dB）随深度
+%     T-B ：横向分辨率（-6 dB）随深度
 %     T-C ：囊肿对比度与 CNR，无噪声与含噪声
-%     T-D ：相对 SNR 随深度，附 10log10(n) 参考
+%     T-D ：SNR 随深度（绝对刻度），附 10log10(n) 参考
 %
 %   轴向分辨率没有表：三种方法实测都是 0.19 mm，比不出差别，不作为比较项
 %   （报告 5.5 节一句话说明，原因见 docs/实验报告_讨论与附录.md 的 B14）。
+%
+%   为什么是 Markdown，而不是直接写进报告或 docx
+%   --------------------------------------------
+%   报告正文是 docs/实验报告.md（纯文本），docx 由 pandoc 从它转出。把表格生成
+%   成 Markdown 片段，报告里只要引用这张表，重跑本函数就同步了；若直接往 docx
+%   里写，每次重算都要手工替换，迟早出现"表里的数和图对不上"。
 %
 %   文件以 UTF-8 打开，中文表头与 ±、µ 等符号才不会乱码；onCleanup 保证即使
 %   中途出错也会关闭文件句柄。
@@ -56,23 +62,24 @@ fprintf(fid, '| 噪声解析/蒙特卡洛比 | %.3f ± %.3f | 1.0 |\n', C.mcRati
 
 % ------------------------------------------------- T-B：横向分辨率
 % 每个方法一行，每个点目标深度一列；最后一行是常规聚焦图像（256 线），单独列出。
-fprintf(fid, '\n### T-B 横向分辨率（−10 dB 宽度，mm）\n\n');
+fprintf(fid, '\n### T-B 横向分辨率（−6 dB 宽度，mm）\n\n');
 fprintf(fid, '| 方法 |');
 fprintf(fid, ' %d mm |', round(R.zPts*1e3));
 fprintf(fid, '\n|%s\n', repmat('---|', 1, 1+numel(R.zPts)));
 for k = 1:nM
     fprintf(fid, '| %s |', R.names{k});
-    fprintf(fid, ' %.2f |', R.w10(k,:)*1e3);
+    fprintf(fid, ' %.2f |', R.wLat(k,:)*1e3);
     fprintf(fid, '\n');
 end
 fprintf(fid, '| 单焦点 |');
-fprintf(fid, ' %.2f |', R.w10F*1e3);
+fprintf(fid, ' %.2f |', R.wLatF*1e3);
 fprintf(fid, '\n');
 
 % ------------------------------------------------------ T-C：对比度 / CNR
 % 九个囊肿的均值 ± 标准差，无噪声与含噪声各一组。
 fprintf(fid, '\n### T-C 对比度与 CNR（9 个囊肿，均值±标准差）\n\n');
-fprintf(fid, '| 方法 | n | |C| 无噪 (dB) | |C| 含噪 (dB) | CNR 无噪 | CNR 含噪 |\n|---|---|---|---|---|---|\n');
+% 表头里的 |C| 必须转义成 \|C\|，否则竖线会被当成列分隔符、把表拆坏（B8 一类）
+fprintf(fid, '| 方法 | n | \\|C\\| 无噪 (dB) | \\|C\\| 含噪 (dB) | CNR 无噪 | CNR 含噪 |\n|---|---|---|---|---|---|\n');
 for k = 1:nM
     fprintf(fid, '| %s | %d | %.1f ± %.1f | %.1f ± %.1f | %.2f ± %.2f | %.2f ± %.2f |\n', ...
         R.names{k}, R.nAngles(k), R.contrast(k).Cmean, R.contrast(k).Cstd, ...
@@ -85,20 +92,22 @@ fprintf(fid, '| 单焦点 | 128 | %.1f ± %.1f | %.1f ± %.1f | %.2f ± %.2f | %
     R.contrastF.CNRmean, R.contrastF.CNRstd, R.contrastFN.CNRmean, R.contrastFN.CNRstd);
 
 % ------------------------------------------------------------- T-D：SNR
-fprintf(fid, '\n### T-D 相对 SNR（dB，以 PW 在 30 mm 为 0 dB）\n\n');
+% 绝对值：σ_e 按"单平面波在 30 mm 处 20 dB"标定，所以这一行在 30 mm 读到约 20 dB，
+% 它是刻度锚点而不是临床灵敏度；方法之间的差才是可比的量（见报告 5.7）。
+fprintf(fid, '\n### T-D SNR（dB，绝对刻度：σ_e 按 PW 在 30 mm 处 20 dB 标定）\n\n');
 fprintf(fid, '| 方法 |');
 fprintf(fid, ' %d mm |', round(R.zdep*1e3));
 fprintf(fid, '\n|%s\n', repmat('---|', 1, 1+numel(R.zdep)));
 for k = 1:nM
     fprintf(fid, '| %s |', R.names{k});
-    fprintf(fid, ' %.1f |', R.snrRel(k,:));
+    fprintf(fid, ' %.1f |', R.snr(k,:));
     fprintf(fid, '\n');
 end
 fprintf(fid, '| 单焦点 |');
-fprintf(fid, ' %.1f |', R.snrRelF);
+fprintf(fid, ' %.1f |', R.snrF);
 fprintf(fid, '\n');
-% 理论值 10*log10(n) 与深度无关，所以单独写成一小行，而不是塞进按深度排的表里
-fprintf(fid, '\n10log10(n) 理论：');
+% 理论值 10*log10(n) 是相对量（相对单次发射），与上表的绝对刻度差一个常数
+fprintf(fid, '\n10log10(n) 理论（相对单次发射）：');
 for k = 1:nM
     fprintf(fid, ' %s=%.1f dB；', R.names{k}, 10*log10(R.nAngles(k)));
 end

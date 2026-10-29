@@ -10,7 +10,10 @@ function run_foc()
 %       J = batch(@run_foc, 0, {}, 'Profile', 'Processes');
 %       diary(J)            % 看进度
 %
-%   耗时参考：P1 128 线约 15 min，REM 约 1 min，P3 256 线约 1 min。
+%   耗时参考（修正接收孔径之后的实测，随机器负载浮动）：P1 128 线约 58 min
+%   （17–28 s/线）；REM 128 线约 6 min（只剩两千多个散射子）；P3 256 线虽多一倍，
+%   但只有 8 个散射子，单线很短，总量仍远小于 P1。早先写的"P1 约 15 min"是收发
+%   共用句柄时的数（7 s/线），已不再适用。
 
 here = fileparts(mfilename('fullpath'));   % .../ultrafast/run
 root = fileparts(here);

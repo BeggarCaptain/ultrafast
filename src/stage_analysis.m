@@ -22,17 +22,19 @@ function stage_analysis(P)
 %
 %   指标约定（以及读表时要注意的地方）
 %   ----------------------------------
-%   * 分辨率只在点目标体模（P3）上测**横向** -10 dB 宽度。这个电平是设计文档
-%     确定的；用混了（例如取 -6 dB）会让数值差 30 % 左右。轴向 -6 dB 宽度虽然
-%     也算得出来，但三种方法一样，不作为比较项（见下面“分辨率”一段）。
+%   * 分辨率只在点目标体模（P3）上测**横向** -6 dB 宽度。这个判据与 pulse_stats
+%     的 -6 dB 带宽同口径（半幅度）；轴向 -6 dB 宽度虽然也算得出来，但三种方法
+%     一样，不作为比较项（见下面“分辨率”一段）。
 %   * 对比度用“强度”（包络平方），内区是半径 2 mm 的圆盘，外区是 4–6 mm 的环带。
-%     在无噪声图像上它由旁瓣决定，所以这里能到 40 dB 以上（11 角度实测 45 dB），
-%     而论文只有 12–33 dB（论文的对比度是噪声受限的）。
+%     无噪声图像上它只由旁瓣泄漏决定，实测 |C| = 12.8 / 23.3 / 16.0 dB（PW /
+%     C11 / 单焦点），与论文的 12 / 20 / 12–32 dB 同量级；含噪版本（C_noisy）
+%     另算一套，两者回答的问题不同（见下面“原理”一段）。
 %   * CNR 用同样的区域；囊肿一黑，它就饱和在 0.7 附近，在本实验条件下并不能区分
 %     方法优劣。列出它是为了完整，而不是当作排序依据。
 %   * SNR = 10log10(<s^2>/<n^2>)，5x5 mm 滑窗，其中噪声功率来自真正经过同一个
-%     DAS 的噪声实现（不是公式推的）。全部相对于 30 mm 处的单平面波，这也是论文
-%     报告复合增益的方式。
+%     DAS 的噪声实现（不是公式推的）。报**绝对** dB：刻度锚点由 stage_sigma 定，
+%     σ_e 使单平面波在 30 mm 处为 20 dB（实测 20.4 dB），所以这一列数本身不是
+%     临床可比的灵敏度；有意义的量是方法之间的差（C11−PW = 8.8 dB）。
 %
 %   数据依赖关系（哪一组输入决定哪一组输出）
 %   ----------------------------------------
@@ -43,6 +45,34 @@ function stage_analysis(P)
 %     foc/*.mat         ──►  单焦点参照（分辨率、对比度、SNR 各一条曲线）
 %   注意 P2 不是独立采集出来的，而是 P1 − REM；这一减法只在射频域、取包络之前
 %   做才严格成立。
+%
+%   原理：复合为什么能提高 SNR
+%   -------------------------
+%   DAS 已经把每个像素的几何延时补掉，所以同一个散射点的回波在 11 个角度下是
+%   同相的：相加时信号幅度变 11 倍（功率 121 倍）。而每次发射的噪声彼此独立：
+%   相加时功率只变 11 倍。于是 SNR 从 S/N 变成 11S/(sqrt(11)N) = sqrt(11)·S/N，
+%   即 10log10(11) = 10.4 dB。本实验实测 8.8 dB，差的那 1.6 dB 来自各角度的信号
+%   幅度并不完全相等（偏转损失、孔径权重差异）与噪声并非严格白噪声。这张"理论上
+%   限"就写在 R.snrGainTheory 里，报告用它作对照。
+%
+%   原理：为什么 P2 = P1 − REM 必须在射频域做
+%   -----------------------------------------
+%   取包络是取模，是非线性的：|a| − |b| 与 |a − b| 不是一回事。P1 与 REM 两幅图
+%   的散斑相位不同，模值相减得到的东西没有物理意义；只有在射频域相减，才等价于
+%   "把囊肿内那批散射子的贡献从回波里去掉"。
+%
+%   原理：为什么对比度要算两套（无噪 / 含噪）
+%   ----------------------------------------
+%   无噪对比度衡量旁瓣泄漏：囊肿内部本该是零，实际有值完全是旁瓣把外面的强回波
+%   漏了进来，所以它反映的是波束形成质量。含噪对比度衡量噪声底：真实系统里囊肿
+%   内部的"黑"由噪声决定，所以它反映的是成像灵敏度。两者都可能成为限制因素，
+%   只报一个会得出片面结论。
+%
+%   原理：CNR 为什么对本实验不敏感
+%   ------------------------------
+%   CNR = (μ_out − μ_in)/σ_out。囊肿一黑（μ_in ≈ 0），它就趋近 μ_out/σ_out ——
+%   对完全发展的散斑，这个比值近似是常数（本实验 0.54–0.63），与用了什么方法关系
+%   很小。所以 CNR 列出来只是为了完整，不作为方法排序的依据。
 
 fprintf('\n===== analysis =====\n');
 outdir = fullfile(P.dataDir, 'res');
@@ -123,40 +153,51 @@ R.contrastFN = metrics_contrast(envF2n, P.txLineX, P.imageZ, P);
 %
 % 只比横向。轴向分辨率由脉冲的空间长度 c*tau/2 决定，与聚焦方式和复合都无关：
 % 三种方法实测都是 0.19 mm（0.19—0.20 mm，±3 %，落在读数不确定度以内），比不出
-% 差别。metrics_resolution 仍然返回 w6（QA 行用它检查 PSF 是不是约 0.2 mm），但
+% 差别。metrics_resolution 仍然返回 wAx（QA 行用它检查 PSF 是不是约 0.2 mm），但
 % 不作为比较项进入结果与表格——原因记在 docs/实验报告_讨论与附录.md 的 B14。
 zPts = [15 25 30 35 45 55]*1e-3;
 xPts = [0 0 0 0 0 0]*1e-3;
 R.zPts = zPts;  R.xPts = xPts;
-w10 = nan(nM, numel(zPts));
+wLat = nan(nM, numel(zPts));
 for k = 1:nM
     for q = 1:numel(zPts)
         m = metrics_resolution(R.P3.env(:,:,k), P.imageX, P.imageZ, xPts(q), zPts(q));
-        w10(k,q) = m.w10;
+        wLat(k,q) = m.wLat;
     end
 end
-w10F = nan(1, numel(zPts));
+wLatF = nan(1, numel(zPts));
 for q = 1:numel(zPts)
     m = metrics_resolution(R.FOC.env3, P.psfLineX, P.imageZ, xPts(q), zPts(q));
-    w10F(q) = m.w10;
+    wLatF(q) = m.wLat;
 end
-R.w10 = w10;  R.w10F = w10F;
+R.wLat = wLat;  R.wLatF = wLatF;
 
 % z = 30 mm 处的三个横向位置：检查分辨率在横向上是否均匀
 xl = [-12 0 12]*1e-3;
-R.w10Lat = nan(nM, 3);  R.w10LatF = nan(1,3);
+R.wLatX = nan(nM, 3);  R.wLatXF = nan(1,3);
 for q = 1:3
     for k = 1:nM
         m = metrics_resolution(R.P3.env(:,:,k), P.imageX, P.imageZ, xl(q), 30e-3);
-        R.w10Lat(k,q) = m.w10;
+        R.wLatX(k,q) = m.wLat;
     end
     m = metrics_resolution(R.FOC.env3, P.psfLineX, P.imageZ, xl(q), 30e-3);
-    R.w10LatF(q) = m.w10;
+    R.wLatXF(q) = m.wLat;
 end
 
 % ------------------------------------------------------------------- SNR
 % SNR(x,z) = 10log10( <s^2> / <n^2> )，5x5 mm 滑窗；沿 x 取中位数得到每个深度
-% 一条曲线。最后全部相对于 30 mm 处的单平面波——这就是论文报告增益的方式。
+% 一条曲线。三种方法都报**绝对** SNR（dB），不再减掉某个参考点。
+%
+% 绝对刻度的锚点：σ_e 由 stage_sigma 按"单平面波在 30 mm 处 20 dB"标定，所以
+% 单平面波在 30 mm 处读到约 20 dB（实测 20.4，差 0.45 来自 5x5 mm 平滑与散斑
+% 统计，见报告 5.7）。因此绝对值的物理含义是"以这个标定约定为刻度"，不是临床
+% 可比的绝对灵敏度；方法之间的差（如 C11 比 PW 高 8.8 dB）才是有意义的量。
+% snrAbsPW30 只作为刻度锚点保留，供图和正文引用，不再用来做归一化。
+%
+% 为什么可以直接用射频的平方：5 mm 窗内有十几个波长（λ = 0.37 mm），求平均时
+% 载波振荡被平滑掉，<rf^2> 正比于包络功率，不必每帧再取一次 Hilbert。
+% 为什么沿 x 取中位数而不是均值：散斑让单条线的 SNR 起伏很大，中位数不会被少数
+% 强散射点拉偏；这也与"沿横线取一个代表值"的物理直觉一致。
 zdep = (15:5:55)*1e-3;
 [zz, snrPW] = snr_curve(R.P1.rf(:,:,1), R.P1.nz(:,:,1), P, P.pixelPitchX);
 snrM = zeros(nM, numel(zdep));
@@ -167,11 +208,9 @@ end
 [zzF, sF] = snr_curve(rfF1, nzF, P, P.txLinePitch);
 snrF = interp1(zzF, sF, zdep, 'linear');
 R.zdep = zdep;
-R.snr  = snrM;
-R.snrF = snrF;
-R.snrAbsPW30 = interp1(zz, snrPW, 30e-3, 'linear');   % 0 dB 参考点
-R.snrRel = snrM - R.snrAbsPW30;
-R.snrRelF = snrF - R.snrAbsPW30;
+R.snr  = snrM;                                        % 绝对 SNR，[nM x 9]，dB
+R.snrF = snrF;                                        % 单焦点绝对 SNR，[1 x 9]
+R.snrAbsPW30 = interp1(zz, snrPW, 30e-3, 'linear');   % 刻度锚点（标定目标 20 dB）
 
 % ------------------------------------------------- 理论增益（用于前向检查）
 % 理想相干复合增益；报告把实测值与之对比。
@@ -242,18 +281,18 @@ function write_csv(outdir, names, R)
 %WRITE_CSV  把指标表导出为 CSV，这样重新生成报告时不必再跑 MATLAB 分析。
 %   每类指标一个文件。
 
-% ---- 横向分辨率：六个轴上深度处的 -10 dB 宽度 -------------------------
+% ---- 横向分辨率：六个轴上深度处的 -6 dB 宽度 --------------------------
 fid = fopen(fullfile(outdir,'table_resolution.csv'),'w');
 fprintf(fid, 'method,');
-for q = 1:numel(R.zPts), fprintf(fid,'w10_%dmm,', round(R.zPts(q)*1e3)); end
+for q = 1:numel(R.zPts), fprintf(fid,'wLat_%dmm,', round(R.zPts(q)*1e3)); end
 fprintf(fid,'\n');
 for k = 1:numel(names)
     fprintf(fid,'%s,', names{k});
-    fprintf(fid,'%.3f,', R.w10(k,:)*1e3);      % 单位 mm
+    fprintf(fid,'%.3f,', R.wLat(k,:)*1e3);      % 单位 mm
     fprintf(fid,'\n');
 end
 fprintf(fid,'FOCUSED,');
-fprintf(fid,'%.3f,', R.w10F*1e3);
+fprintf(fid,'%.3f,', R.wLatF*1e3);
 fprintf(fid,'\n');
 fclose(fid);
 
@@ -270,14 +309,14 @@ fprintf(fid,'FOCUSED,128,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n', ...
     R.contrastFN.Cmean, R.contrastFN.CNRmean);
 fclose(fid);
 
-% ---- 相对 SNR 随深度 ------------------------------------------------
+% ---- 绝对 SNR 随深度 ------------------------------------------------
 fid = fopen(fullfile(outdir,'table_snr.csv'),'w');
 fprintf(fid,'method,'); fprintf(fid,'%dmm,', round(R.zdep*1e3)); fprintf(fid,'\n');
 for k = 1:numel(names)
     fprintf(fid,'%s,', names{k});
-    fprintf(fid,'%.2f,', R.snrRel(k,:));
+    fprintf(fid,'%.2f,', R.snr(k,:));
     fprintf(fid,'\n');
 end
-fprintf(fid,'FOCUSED,'); fprintf(fid,'%.2f,', R.snrRelF); fprintf(fid,'\n');
+fprintf(fid,'FOCUSED,'); fprintf(fid,'%.2f,', R.snrF); fprintf(fid,'\n');
 fclose(fid);
 end

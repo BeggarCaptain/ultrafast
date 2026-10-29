@@ -12,6 +12,7 @@ data/**/*.bin
 data/**/*.h5
 data/**/*.log
 data/logs/
+data/tmp_*/
 figures/**/*.fig
 figures/**/*.pdf
 figures/_*.png

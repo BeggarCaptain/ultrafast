@@ -12,21 +12,40 @@
 
 用 Field II 3.30 复现 Montaldo 等（IEEE TUFFC, 2009）的单平面波成像与相干平面波复合（CPWC），以传统逐线聚焦 B 模式为对照，比较横向分辨率、囊肿对比度与 SNR（轴向分辨率只由脉冲长度决定，三者相同，不作比较项），并对均匀随机散射子成像。**平面波角度固定为 11 个：$-10^\circ$ 到 $+10^\circ$，间隔 $2^\circ$。** 采集帧率只作为序列推导值列出，不列入实验对比；另设可选实验 E7，在 GPU 机器上实测“算法处理帧率”（本机无 GPU，未执行）。
 
-## 核心结果（详见报告第 5 节）
+## 核心结果（详见报告第 4 节）
 
-| 方法 | 发射次数 | −10 dB 横向宽度 | 囊肿对比度 | 相对 SNR（30 mm） |
+| 方法 | 发射次数 | −6 dB 横向宽度 | 囊肿对比度 | SNR（30 mm） |
 |---|---|---|---|---|
-| 单平面波 | 1 | 1.05–1.08 mm | 12.8 dB | 0 dB |
-| **11 角度复合** | **11** | **0.98–0.99 mm** | **23.3 dB** | **+8.8 dB** |
-| 单焦点（30 mm） | 128 | 0.81 mm（焦外 1.01–1.10 mm） | 16.0 dB | +10.9 dB |
+| 单平面波 | 1 | 0.83–0.86 mm | 12.8 dB | 20.4 dB |
+| **11 角度复合** | **11** | **0.74–0.75 mm** | **23.3 dB** | **29.2 dB（+8.8）** |
+| 单焦点（30 mm） | 128 | 0.65 mm（焦外 0.80–0.90 mm） | 22.2 dB | 31.3 dB（+10.9） |
 
-趋势与论文 Table I 一致：复合在分辨率上接近单焦点、在对比度上超过单焦点、在 SNR 上接近最优多焦点。绝对数值差异来自二维体模、无衰减、无 TGC 与散射子密度，报告 5.8 节对照、归档 6.4 节逐项分析。
+趋势与论文 Table I 一致：复合在分辨率上接近单焦点、在对比度上超过单焦点、在 SNR 上接近最优多焦点。绝对数值差异来自二维体模、无衰减、无 TGC 与散射子密度；与论文 Table I 的逐项差异见归档 6.4 节。
 
 ## 实现要点
 
 - **Field II 延时陷阱**：`calc_scat_multi` 会把阵元发射激励延时写入该通道的时间轴，自定义 DAS 必须把 $x_1\sin\alpha/c$ 计入延时模型；否则倾斜平面波图像会横向剪切（$10^\circ$ 时约 5.2 mm），复合完全失效。定位方法与残差数据见 `docs/实验报告_讨论与附录.md` 的 6.1 节。
-- **相干复合必须在取包络之前、在 RF 域相加**。复合在图像域合成一个角孔径 $\pm10^\circ$ 的发射孔径，但**不产生**沿深度的发射焦区：逐点散射子的复合成像（`figures/F5_psf_map.png`）在 $|x|\le10$ mm、$z=15$–50 mm 内扣除深度趋势后的幅值起伏为 ±1.01 dB，横向 −6 dB 宽度 0.71–0.78 mm、轴向 0.19–0.20 mm，相干因子 0.982–0.994。图像实际看到的发射加权是幅度相加 $\sum_\alpha|p_\alpha|$，在上述区域内起伏 1.45 dB（最低 −0.79 dB，`figures/F14_field_coverage.png`）。
+- **相干复合必须在取包络之前、在 RF 域相加**。复合在图像域合成一个角孔径 $\pm10^\circ$ 的发射孔径，但**不产生**沿深度的发射焦区：逐点散射子的复合成像（`figures/F5_psf_map.png`）在 $|x|\le10$ mm、$z=15$–50 mm 内扣除深度趋势后的幅值起伏为 ±1.01 dB，横向 −6 dB 宽度 0.71–0.78 mm、轴向 0.19–0.20 mm，相干因子 0.982–0.994。图像实际看到的发射加权是幅度相加 $\sum_\alpha|p_\alpha|$，在上述区域内起伏 0.12 dB（`figures/F14_field_coverage.png`）。
 - **SNR 增益低于 $10\log_{10}n$**（8.8 dB 对 10.4 dB）：散斑在角度间只是部分相干，因此该公式对散斑目标只是上界；4 倍密度对照排除了“散射子密度不足”这一解释。
+
+## 代码怎么读：注释约定
+
+每个函数开头按同一套层次写，读代码时照这个顺序找信息：
+
+| 段落 | 回答什么问题 |
+|---|---|
+| 它在整条链路里的位置 | 输入从哪来、输出给谁用；没有它后面的哪一步会缺什么 |
+| 原理 | 这一步在物理/数学上到底做了什么（公式、符号含义） |
+| 为什么这样做 | 与替代做法对比：为什么用线性插值而不是样条、为什么在射频域相加、为什么参照方法用 z/c 近似 |
+| 关键取值与实测 | 参数为什么是 0.32、1.75、0.05 mm；注释里引用的数都是实测值，并注明出处（报告节号或附录 B 编号） |
+| 易错点 | 曾经踩过的坑（时间轴修正、NaN、随机种子与断点续跑、注释与实测不符） |
+
+几处密度较高、适合作为入口的文件：`src/das_pw.m`（计算成像的核心）、
+`config/params.m`（每个参数为什么取这个值）、`src/stage0_calib.m`（自检与时间零点）、
+`src/stage_sigma.m`（噪声模型）、`src/stage_analysis.m`（复合与三个指标）。
+
+注释里的数字必须与代码/数据一致：发现注释与实测不符时，改动记录进
+`docs/实验报告_讨论与附录.md` 的附录 B（已知不一致与遗留项），不静默改掉。
 
 ## 核心参数
 
@@ -60,18 +79,21 @@ cd ultrafast
 addpath config src run
 
 run_core        % 1) 采集 + 分析：E0 → P3 点目标 → P1（11 角度 + 128 线）→ REM → 噪声 → 声场 → 指标
-run_refresh     % 2) 出全部产物：声场 → 指标 → 逐点成像 → 图 F1–F14 → 表 T-A…T-D（约 1 min）
+run_refresh     % 2) 出全部产物：声场 → 指标 → 逐点成像 → 轴上逐点实验 → 图 F1–F14 → 表（缓存命中约 10 s）
 ```
 
-`run_refresh` 依次调用 `stage_fields` → `stage_analysis` → `run_psfmap` → `make_figures` →
+`run_refresh` 依次调用 `stage_fields` → `stage_analysis` → `run_psfmap` → `run_axisres` → `make_figures` →
 `make_fig_coverage` → `make_fig_pointtargets` → `make_report_tables`，所以**不需要**再单独
-调用后面这几个函数——单独调用只是调试时用。
+调用后面这几个函数——单独调用只是调试时用。其中 `stage_fields`（声场，约 4 s）、
+`run_psfmap`（逐点成像，21–35 s）与 `run_axisres`（轴上逐点单散射子实验，首次约 3.5 min，
+图 F10 的数据）是确定性计算，各自在产物里存了一份输入指纹，参数与网格没变就直接用磁盘
+上的结果；想强制重算用 `run_refresh('force')`（约 4.5–5.5 min）。
 
 | 入口 | 做什么 | 典型用时 |
 |---|---|---|
 | `run_core` | 全部 Field II 采集 + 噪声 + 声场 + 指标（不含图） | 冷 ≈50 min（负载重时 ~95 min）；数据已在时 ≈10 s |
-| `run_refresh` | 不碰采集，重算声场/指标/逐点成像，出 F1–F14 与表 | ≈1 min（逐点成像占 35 s） |
-| `run_tail` | `run_refresh` **加上** REM 采集与噪声标定（但**不含** F13） | 数据齐时 ≈20 s；P1 后中断时 ≈7 min |
+| `run_refresh` | 不碰采集，重算声场/指标/逐点成像/轴上逐点实验，出 F1–F14 与表 | ≈10 s（命中缓存）；`'force'` 时 ≈4.5–5.5 min |
+| `run_tail` | `run_refresh` **加上** REM 采集与噪声标定（但**不含** F13） | 数据齐时 ≈20 s（声场与两个逐点实验命中缓存）；P1 后中断时 ≈11 min |
 
 三个入口的关系：`run_tail` = `run_refresh` + 「P1 之后那部分采集」，但少了 F13 那一步。所以正常复现用
 `run_core` + `run_refresh`；只有当 `run_core` 在 P1 之后中断（断电、被 kill）时，才用
@@ -82,9 +104,9 @@ run_refresh     % 2) 出全部产物：声场 → 指标 → 逐点成像 → �
 | 情形 | `data/pw`、`data/foc`、`data/noise` | `run_core` 用时 | 实际做了什么 |
 |---|---|---|---|
 | **冷启动** | 空 | **约 50 min（负载重时 ~95 min）** | 全部 Field II 采集 + 噪声 + 声场 + 分析 |
-| **热启动** | 已存在（本目录现状） | **约 10 s** | 只重算 σ_e、发射声场、指标；采集全部跳过 |
+| **热启动** | 已存在（本目录现状） | **约 10 s** | 只重算 σ_e 与指标；声场命中缓存，采集全部跳过 |
 
-原因：每个采集函数都是断点续跑的（`if exist(f,'file'), continue;`），`run_core` 也会跳过已存在的 `calib.mat`。所以**在本目录直接跑 `run_core` 会在 10 s 内结束，这是正常的、不是没跑**——它会重算并覆盖 `data/field/maps.mat` 与 `data/res/results.mat`。
+原因：每个采集函数都是断点续跑的（`if exist(f,'file'), continue;`），`run_core` 也会跳过已存在的 `calib.mat`。所以**在本目录直接跑 `run_core` 会在 10 s 内结束，这是正常的、不是没跑**——它会重算并覆盖 `data/res/results.mat`；`data/field/maps.mat` 带输入指纹，参数没变时直接复用、变了才重算。
 
 ### 改了参数怎么办：`run_core` 的三种模式
 
@@ -106,23 +128,23 @@ run_refresh     % 2) 出全部产物：声场 → 指标 → 逐点成像 → �
 
 冷启动的构成（实测，按数据文件时间戳统计）：散斑体模 11 个平面波 ≈ 10 min（每条 28–52 s）；128 条聚焦线 ≈ 58 min（每条 ≈ 17–28 s，比早期版本的 7 s 慢，因为接收孔径改成独立的 128 通道句柄后 Field II 不能复用空间冲激响应）；REM 的 11 个平面波 ≈ 1 min、128 条聚焦线 ≈ 6 min；噪声 139 幅 ≈ 2 min；声场 + 分析 ≈ 1 min。机器负载较重时整体慢一倍左右（最近一次整条重跑 79.8 min）。数值结果不受影响。
 
-> 注意：图 F5 的数据（`data/res/psfmap.mat`）由 `run_psfmap` 产生（约 35 s），图 F14 由 `make_fig_coverage` 从 `data/field/maps.mat` 画出——两者都**不在** `run_core` 里，而在 `run_refresh`/`run_tail` 里。所以冷启动之后必须再跑一次 `run_refresh`，否则 F5/F14 没有数据。
+> 注意：图 F5 的数据（`data/res/psfmap.mat`）由 `run_psfmap` 产生（21–35 s），图 F10 的数据（`data/res/axisres.mat`）由 `run_axisres` 产生（首次约 3.5 min），图 F14 由 `make_fig_coverage` 从 `data/field/maps.mat` 画出——三者都**不在** `run_core` 里，而在 `run_refresh`/`run_tail` 里。所以冷启动之后必须再跑一次 `run_refresh`，否则 F5/F10/F14 没有数据。这三份产物都带输入指纹，参数没变时再跑 `run_refresh` 只读不重算（约 10 s）。
 
 ### `run_tail` 是什么、什么时候用
 
-`run_tail` 做 **P1 之后** 的全部收尾：REM（囊肿孔洞）采集 → 噪声 → 发射声场 → 指标 → 逐点成像 → 图 F1–F12、F14 → 表 T-A…T-D。**它不画 F13**（点目标定位，`make_fig_pointtargets`），所以走这条路时最后补一次 `make_fig_pointtargets`。它假定 `data/pw/P1_a###.mat`、`data/foc/P1_l###.mat` 与 `calib.mat` 里的 `sigma_e` 已存在——缺了会在启动时直接提示“先跑 run_core”，而不是抛一个难懂的 load 错误。
+`run_tail` 做 **P1 之后** 的全部收尾：REM（囊肿孔洞）采集 → 噪声 → 发射声场 → 指标 → 逐点成像 → 轴上逐点实验 → 图 F1–F12、F14 → 表 T-A…T-D。**它不画 F13**（点目标定位，`make_fig_pointtargets`），所以走这条路时最后补一次 `make_fig_pointtargets`。它假定 `data/pw/P1_a###.mat`、`data/foc/P1_l###.mat` 与 `calib.mat` 里的 `sigma_e` 已存在——缺了会在启动时直接提示“先跑 run_core”，而不是抛一个难懂的 load 错误。
 
 | 场景 | 命令 | 用时 |
 |---|---|---|
-| `run_core('cold')` 跑完，要出图出表 | `run_refresh`（或 `run_tail`） | ≈ 1 min（逐点成像占 35 s） |
+| `run_core('cold')` 跑完，要出图出表 | `run_refresh`（或 `run_tail`） | ≈ 10 s（命中缓存；强制重算 ≈35–50 s） |
 | `run_core` 在 P1 之后中断 | `run_tail` | ≈ 7 min（补 REM 11 个角度 + 128 条聚焦线 + 噪声） |
-| 已经全部采完，只想重画图/重算指标 | `run_refresh` | ≈ 1 min（一次出 F1–F14 + 表） |
+| 已经全部采完，只想重画图/重算指标 | `run_refresh` | ≈ 10 s（一次出 F1–F14 + 表） |
 
 冷启动的完整顺序：
 
 ```matlab
 run_core('cold')   % ≈ 50 min（负载重时 ~95 min）：全部采集 + 噪声 + 声场 + 分析（不出图）
-run_refresh        % ≈ 1 min ：F1–F14 + 表 T-A…T-D
+run_refresh        % ≈ 35–50 s：首次要算声场与逐点成像；之后命中缓存约 10 s；F1–F14 + 表 T-A…T-D
 ```
 
 `run_tail` 与 `run_refresh` 的区别有两条：①`run_tail` 多一层“缺什么采什么”的 REM/噪声采集，所以 P1 之后中断时用它；②`run_refresh` 里含 `make_fig_pointtargets`（F13），`run_tail` 不含，因此走 `run_tail` 时图与表都齐、只差 F13，补一次 `make_fig_pointtargets` 即可。

@@ -1,5 +1,5 @@
 function m = metrics_resolution(env, x, z, xp, zp)
-%METRICS_RESOLUTION  单个点目标的 -10 dB 横向宽度与 -6 dB 轴向宽度。
+%METRICS_RESOLUTION  单个点目标横向与轴向的 -6 dB 全宽。
 %
 %   M = METRICS_RESOLUTION(ENV, X, Z, XP, ZP) 测量标称位置在 (XP, ZP) 的目标
 %   的点扩散函数。
@@ -12,8 +12,8 @@ function m = metrics_resolution(env, x, z, xp, zp)
 %     zp  ：目标的标称轴向位置 [m]
 %
 %   输出结构体
-%     w10  ：横向 -10 dB 全宽 [m]
-%     w6   ：轴向 -6 dB 全宽 [m]
+%     wLat ：横向 -6 dB 全宽（半幅度）[m]
+%     wAx  ：轴向 -6 dB 全宽（半幅度）[m]
 %     xpk  ：实测峰值横向位置 [m]
 %     zpk  ：实测峰值轴向位置 [m]
 %     peak ：峰值处的包络值（用于合理性检查）
@@ -24,7 +24,13 @@ function m = metrics_resolution(env, x, z, xp, zp)
 %      相邻目标框进来）；
 %   2. 求窗口内的全局最大值；
 %   3. 取峰值所在行的横向曲线、所在列的轴向曲线；
-%   4. 两条曲线都用 pchip 上采样 8 倍，再用线性插值定位 -10 dB / -6 dB 交叉点。
+%   4. 两条曲线都用 pchip 上采样 8 倍，再用线性插值定位半幅度交叉点。
+%
+%   为什么两个方向都取 -6 dB
+%   ------------------------
+%   点扩散函数的宽度习惯上按半幅度（-6 dB）报，它对应脉压后主瓣的可分辨宽度；
+%   -10 dB 是更靠裙边的电平，数值依赖旁瓣结构，跨阵列、跨加窗不好比较。取 -6 dB
+%   也让横向/轴向两个读数同口径，并与 pulse_stats 的 -6 dB 带宽一致。
 %
 %   第 4 步很关键：轴向 PSF 只有约 0.19 mm 宽，而图像网格是 0.05 mm，-6 dB
 %   以上只有三个采样点左右。不上采样的话宽度会被量化成 0.05 mm 的整数倍，
@@ -38,7 +44,7 @@ function m = metrics_resolution(env, x, z, xp, zp)
 %   宽度是 0.171—0.193 mm，而 0.05 mm 网格上读出 0.176—0.199 mm：系统性偏大
 %   0.005—0.017 mm，且偏置随深度变（30 mm 处最大）。所以本函数给出的轴向宽度
 %   只应读到 0.01 mm（约 5 %）；要比这更细，得在更密的 z 网格上重建。
-%   横向 -10 dB 宽度约 20 个网格点宽，不受这个限制。
+%   横向 -6 dB 宽度约 14 个网格点宽，不受这个限制。
 
 ix = find(abs(x - xp) <= 5e-3);         % 目标附近的横向窗口
 iz = find(abs(z - zp) <= 3e-3);         % 目标附近的轴向窗口
@@ -55,7 +61,7 @@ axp = interp1(z(iz),    E(:, c),    zu, 'pchip'); % 轴向曲线（第 c 列）
 % ---- 峰值位置与宽度 -----------------------------------------------------
 [~, iL] = max(lat);  m.xpk = xu(iL);
 [~, iA] = max(axp);  m.zpk = zu(iA);
-m.w10 = crossing_width(xu, lat, 10^(-10/20));     % 横向 -10 dB 宽度
-m.w6  = crossing_width(zu, axp, 0.5);             % 轴向 -6 dB 宽度
+m.wLat = crossing_width(xu, lat, 0.5);            % 横向 -6 dB（半幅度）宽度
+m.wAx  = crossing_width(zu, axp, 0.5);            % 轴向 -6 dB（半幅度）宽度
 m.peak = max(lat);
 end

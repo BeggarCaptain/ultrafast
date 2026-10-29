@@ -87,7 +87,8 @@ try
     end
 
     % ------------------------------------------------- P3（快速验证）
-    % 8 个点散射子，很便宜；下面的 QA 行必须打印出约 1 mm 与约 0.2 mm。
+    % 8 个点散射子，很便宜；下面的 QA 行必须打印出约 0.85 mm 与约 0.20 mm
+    % （单平面波、−6 dB 口径；0.7 mm 是 11 角度复合后的值，别混用）。
     % 如果数字不对，说明延时模型有问题——此时停下，比三小时后再发现问题好。
     [pp, pa] = phantom_points(P);
     acquire_all_pw(P, 'P3', pp, pa, false);
@@ -97,8 +98,8 @@ try
     Sp = load(fullfile(P.dataDir,'pw',sprintf('P3_a%03d.mat', P.zeroAngleIndex)));
     env = abs(hilbert(double(Sp.img)));     % 提取包络
     m = metrics_resolution(env, P.imageX, P.imageZ, 0, 30e-3);
-    fprintf('QA: PW(0 deg) point at 30 mm -> w10 = %.2f mm, w6 = %.2f mm\n', ...
-        m.w10*1e3, m.w6*1e3);
+    fprintf('QA: PW(0 deg) point at 30 mm -> wLat = %.2f mm, wAx = %.2f mm\n', ...
+        m.wLat*1e3, m.wAx*1e3);
 
     % ------------------------------------------------------------- P1 / REM
     % P1 是均匀散斑体模（也用于 SNR）；keepCh=true 是因为 E7 与图 F6

@@ -24,6 +24,24 @@ function run_E7_gpu_throughput()
 %       end-to-end   ：含一帧的 H2D 传输（把 PCIe 带宽也算进去）；
 %   * 只有当 GPU 与 CPU 图像的 NRMSE 小于 1e-3 时，才认为速度数字可信。
 %
+%   为什么取中位数而不是平均值
+%   ------------------------
+%   墙钟时间受系统调度、后台进程、显存回收影响，偶尔会冒出一个明显偏大的值；
+%   平均值会被这些离群值整体抬高，中位数反映的是"典型的一帧"。三个数（中位数、
+%   最小值、最大值）都存在 e7_throughput.mat 里，中位数只用于画图。
+%
+%   为什么既报 compute-only 又报 end-to-end
+%   --------------------------------------
+%   真实系统里通道数据要先从采集卡传进显存，只报 compute-only 会高估 GPU 的
+%   实际收益；反过来只报 end-to-end 又把传输开销全算在算法头上。两个都给，读者
+%   可以按自己的数据通路取用。
+%
+%   为什么 NRMSE 门限是 1e-3
+%   -----------------------
+%   GPU 版用单精度、CPU 版是双精度，两者不可能逐位相同；1e-3 的相对误差足以
+%   排除"网格、延时、孔径用错了"这类真错误，又不会因为浮点精度差异而误判。
+%   如果这条不通过，速度再快也没有意义——那是另一个算法。
+%
 %   运行条件：CUDA GPU + Parallel Computing Toolbox。没有的话脚本打印
 %   “未执行”后返回，项目其他部分都不依赖它。
 %
@@ -31,13 +49,19 @@ function run_E7_gpu_throughput()
 %
 %   注意：本机没有 CUDA 设备（gpuDeviceCount = 0），因此报告中的 E7 未执行；
 %   脚本已就绪，换到有 GPU 的机器上可直接运行。
+%   无 GPU 时脚本仍会先把 CPU 计时写进 data/res/e7_throughput.mat（gpu 字段为
+%   'none'），然后打印"未执行"并返回，**不会**生成图 F15。所以看到这个 .mat
+%   不等于 E7 跑过；报告里判断 E7 是否执行的唯一依据是有没有 F15 与 GPU 时间。
+%   不需要留这个文件时直接删掉即可，它不被任何图或表引用。
 
 here = fileparts(mfilename('fullpath'));   % .../ultrafast/run
 root = fileparts(here);
 addpath(fullfile(root, 'config'));
 addpath(fullfile(root, 'src'));
 P = params(root);
-C = load(fullfile(P.dataDir, 'calib.mat'));
+% 不需要 calib.mat：每个角度的时间零点 dt 与 t0 都随通道数据一起存在
+% data/pw/P1_a###.mat 里（采集时就写进去了），这里直接用它们，保证基准测试
+% 与正式分析用的是同一组时间基准。
 
 outdir = fullfile(P.dataDir, 'res');
 if ~exist(outdir, 'dir'), mkdir(outdir); end
@@ -171,14 +195,14 @@ subplot(1,2,1);
 semilogy(res.nList, res.cpu*1e3, 'o-', 'LineWidth', 1.3); hold on;
 semilogy(res.nList, res.gpuC*1e3, 's-', 'LineWidth', 1.3);
 semilogy(res.nList, res.gpuE*1e3, 'd--', 'LineWidth', 1.1);
-xlabel('n angles'); ylabel('time per frame (ms)'); grid on;
-legend('CPU','GPU compute-only','GPU end-to-end','Location','northwest');
-title('Algorithmic processing time');
+xlabel('角度数 n'); ylabel('单帧耗时（ms）'); grid on;
+legend('CPU','GPU（仅计算）','GPU（含传输）','Location','northwest');
+title('算法处理耗时');
 subplot(1,2,2);
 plot(res.nList, 1./res.cpu, 'o-', 'LineWidth', 1.3); hold on;
 plot(res.nList, 1./res.gpuC, 's-', 'LineWidth', 1.3);
-xlabel('n angles'); ylabel('algorithmic frame rate (fps)'); grid on;
+xlabel('角度数 n'); ylabel('算法处理帧率（fps）'); grid on;
 legend('CPU','GPU','Location','northeast');
-title('NOT the acquisition frame rate');
+title('注意：这不是采集帧率');
 save_fig(fig, fname); close(fig);
 end
